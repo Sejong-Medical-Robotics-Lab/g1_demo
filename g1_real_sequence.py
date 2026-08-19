@@ -69,10 +69,14 @@ REAL_ACTIONS = {
 #   ※ 2026-07 master 기준: Damp=FSM1, Squat2StandUp=706(완료 후 4 보고 가능성),
 #     Start=FSM500 (구버전: StandUp=4, Start=200). FSM 관측값이 다르면 육안 게이트가
 #     최종 판정이며, 관측값을 운영가이드 FAQ 표에 기록해 다음 조에 인수인계한다.
+#   실기체 관측으로 확정한 사슬: 0(전원 인가) → 1(Damp) → 4(Lock Stand) → 500/200
+#   706 은 Damp 직후 거부된다(코드 0 을 반환해도 FSM 이 안 바뀜) — 기립은 4 다.
+#   SDK 에 4 의 래퍼가 없어 SetFsmId(4) 로 직접 보낸다.
+#   ★ 실기체 실측(2026-08): 레귤러 모드 = FSM 200. Start()(=500)는 통하지 않는다.
 TRANSITIONS = [
     ("Damp — 힘 빼기(알려진 안전 상태)", 1,   {1},        3.0,  8.0),
-    ("기립 전이(위치잠금 기립)",         706, {4, 706},   6.0, 15.0),
-    ("메인 컨트롤(균형 제어) 진입",       500, {500, 200}, 5.0, 12.0),
+    ("Lock Stand — 잠금 기립(레디)",      4,   {4},        6.0, 15.0),
+    ("레귤러 모드(메인 컨트롤) 진입",      200, {200, 500}, 5.0, 12.0),
 ]
 
 # 보행 안전 상한 — ("move", (vx,vy,vyaw), sec) 행에 적용된다.
@@ -85,9 +89,12 @@ LOG_PATH = "g1_session_log.csv"   # 교재 6.4 '한 줄 로그' 자동 기록
 # --audio 일 때 쓰는 문구·LED. LED 색은 관객이 상태를 눈으로 알 수 있게 한다.
 LED = {"damp": (255, 0, 0), "standing": (255, 160, 0), "balance": (0, 255, 0),
        "arm": (0, 120, 255), "walk": (160, 0, 255), "off": (0, 0, 0)}
-SPEECH = {1: ("댐프 모드로 전환합니다.", "damp"),
-          706: ("기립합니다.", "standing"),
-          500: ("균형 제어 상태입니다.", "balance")}
+# 상태별 LED 색. 음성 안내는 로봇 내장 음성이 담당한다 —
+# G1 의 TtsMaker 는 한국어를 지원하지 않고 영어 발음도 부정확하다.
+SPEECH = {1: (None, "damp"),
+          4: (None, "standing"),
+          200: (None, "balance"),
+          500: (None, "balance")}
 
 
 # ── 공통 유틸 ──────────────────────────────────────────────────────────
@@ -169,12 +176,14 @@ class RealG1:
                 # 시작하면 영원히 0 이다. 1 로 두면 1,2,4,8… 로 증가한다.
                 self.audio.tts_index = 1
                 self.audio.SetVolume(int(volume))
+                self.tts_enabled = False   # 우리 TTS 는 쓰지 않는다(한국어 미지원)
             except Exception as e:
                 print(f"  [오디오] 초기화 실패({e}) — 음성/LED 없이 진행합니다.")
                 self.audio = None
 
     def say(self, text):
-        if self.audio is None:
+        """기본 비활성 — 안내는 로봇 내장 음성이 담당한다."""
+        if self.audio is None or not getattr(self, "tts_enabled", False):
             return
         try:
             self.audio.TtsMaker(text, 0)
@@ -342,8 +351,10 @@ def do_transition(robot, label, fsm_id, expect, settle, timeout):
     banner(f"전이: {label}  (SetFsmId {fsm_id})")
     gate(f"멘토 승인 — '{label}' 실행해도 됩니까?")
     text, color = SPEECH.get(fsm_id, (None, None))
+    if color:
+        robot.led(color)
     if text:
-        robot.announce(text, color)
+        robot.say(text)
     robot.set_fsm(fsm_id, label)
     call_text(f"{label} — SetFsmId({fsm_id}) 전송")
     t0 = time.monotonic()
@@ -404,7 +415,7 @@ def main():
     ap.add_argument("--arm-only", action="store_true",
                     help="전이 생략 — 멘토가 조이스틱으로 이미 균형 제어까지 올린 상태에서 팔 동작만")
     ap.add_argument("--audio", action="store_true",
-                    help="각 단계에서 음성 안내 + LED 색 표시(데모용)")
+                    help="LED 색으로 상태 표시 (음성은 로봇 내장 음성이 담당)")
     ap.add_argument("--volume", type=int, default=70, help="--audio 볼륨 0~100")
     ap.add_argument("--enable-walk", action="store_true",
                     help="SEQUENCE 의 move/stop 행 허용 — 2단계 단독 검증 완료 후에만")
@@ -472,7 +483,7 @@ def main():
             if how == "hold":
                 countdown(wait, label)
             elif how == "loco_wave":
-                robot.announce("인사하겠습니다.", "arm")
+                robot.led("arm")
                 robot.wave()
                 countdown(wait, label)
             elif how == "arm":
@@ -482,7 +493,7 @@ def main():
                 robot.release_arm()          # 팔 제어 반납 — 다음 동작/보행을 위해
                 print("      release arm 전송")
             elif how == "move":
-                robot.announce("이동하겠습니다.", "walk")
+                robot.led("walk")
                 robot.release_arm()          # 보행 전 팔 반납
                 vx, vy, vyaw = real
                 t_end = time.monotonic() + wait
@@ -504,7 +515,7 @@ def main():
 
         robot.stop_move()
         robot.release_arm()
-        robot.announce("시연을 마칩니다. 감사합니다.", "balance")
+        robot.led("balance")
         call_text("시퀀스 완료")
         result = f"정상 완료 ({len(plan)}행)"
 
@@ -514,7 +525,7 @@ def main():
                       "(다음 실행자 대기) > ").strip().lower()
             if c == "d":
                 gate("멘토 승인 — Damp 로 종료합니까? (행어 스트랩 하중 확인 준비)")
-                robot.announce("댐프 모드로 종료합니다.", "damp")
+                robot.led("damp")
                 robot.damp()
                 call_text("Damp 확인 — 종료 절차 진행")
                 break

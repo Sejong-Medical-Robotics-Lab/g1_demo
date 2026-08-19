@@ -30,7 +30,7 @@ import sys
 import time
 
 from g1_common import (FSM, AbortRun, G1Link, RealCommandError, banner,
-                       call_text, gate, safe_damp)
+                       call_text, gate, safe_exit)
 
 # 안전 상한 — 이 값을 넘는 인자는 자동으로 잘린다(clamp).
 LIMIT_VX = 0.3      # m/s  전후
@@ -75,8 +75,7 @@ def drive(link, label, vx, vy, vyaw, sec):
 
     print(f"\n  ▶ {label}: vx={vx:+.2f} vy={vy:+.2f} vyaw={vyaw:+.2f}  {sec:.1f}s")
     moving = any(abs(v) > 1e-6 for v in (vx, vy, vyaw))
-    link.announce(f"{label}합니다." if moving else "정지합니다.",
-                  "walk" if moving else "balance")
+    link.led("walk" if moving else "balance")
     t_end = time.monotonic() + sec
     n = 0
     while time.monotonic() < t_end:
@@ -101,7 +100,10 @@ def main():
     ap.add_argument("--vy", type=float, default=0.0, help="좌우 [m/s]")
     ap.add_argument("--vyaw", type=float, default=0.0, help="회전 [rad/s]")
     ap.add_argument("--sec", type=float, default=3.0, help="지속 시간 [s]")
-    ap.add_argument("--audio", action="store_true", help="음성 안내 + LED 색 표시")
+    ap.add_argument("--exit", choices=["keep", "damp"], default="keep",
+                    help="이상 종료 시: keep=정지만 하고 자세 유지(기본) / damp=Damp")
+    ap.add_argument("--audio", action="store_true",
+                    help="LED 색으로 상태 표시 (음성은 로봇 내장 음성)")
     ap.add_argument("--volume", type=int, default=70, help="--audio 볼륨 0~100")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
@@ -141,22 +143,22 @@ def main():
         link.release_arm()   # 팔 제어가 잡혀 있으면 보행 전에 반납
         for label, vx, vy, vyaw, sec in plan:
             drive(link, label, vx, vy, vyaw, sec)
-        link.announce("보행 시험을 마쳤습니다.", "balance")
+        link.led("balance")
         call_text("보행 시퀀스 완료")
 
     except KeyboardInterrupt:
         print()
         link.stop_move()
-        safe_damp(link, "Ctrl+C 중단")
+        safe_exit(link, "Ctrl+C 중단", damp=(args.exit == "damp"))
     except AbortRun as e:
         link.stop_move()
-        safe_damp(link, str(e))
+        safe_exit(link, str(e), damp=(args.exit == "damp"))
     except RealCommandError as e:
         link.stop_move()
-        safe_damp(link, str(e))
+        safe_exit(link, str(e), damp=(args.exit == "damp"))
     except Exception as e:
         link.stop_move()
-        safe_damp(link, f"예외 {type(e).__name__}: {e}")
+        safe_exit(link, f"예외 {type(e).__name__}: {e}", damp=(args.exit == "damp"))
     finally:
         try:
             link.stop_move()    # 어떤 경로로 끝나든 마지막에 한 번 더

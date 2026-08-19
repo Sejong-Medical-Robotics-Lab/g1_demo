@@ -22,15 +22,20 @@ import time
 
 # ── FSM ID (unitree_sdk2py/g1/loco/g1_loco_client.py 기준) ────────────
 class FSM:
-    ZERO_TORQUE = 0      # ZeroTorque()
+    ZERO_TORQUE = 0      # ZeroTorque() — 전원 인가 직후의 기본 상태(관측용, 보내지 않는다)
     DAMP = 1             # Damp()
+    SQUAT = 2            # 래퍼 없음
     SIT = 3              # Sit()
+    LOCK_STAND = 4       # ★ 잠금 기립 — SDK 에 래퍼가 없어 SetFsmId(4) 로 직접 보낸다
+    MAIN_CONTROL = 200   # 래퍼 없음 — Start() 가 안 통할 때의 대안
     START = 500          # Start() — 메인 컨트롤(균형 제어)
     LIE2STANDUP = 702    # Lie2StandUp()
     SQUAT_TOGGLE = 706   # Squat2StandUp() / StandUp2Squat() — 같은 ID(토글!)
+                         # Damp 직후에는 거부된다. 반드시 LOCK_STAND 를 거친 뒤에 쓴다.
 
 
-FSM_NAME = {0: "ZeroTorque", 1: "Damp", 3: "Sit", 500: "Start(메인컨트롤)",
+FSM_NAME = {0: "ZeroTorque", 1: "Damp", 2: "Squat", 3: "Sit", 4: "LockStand(잠금기립)",
+            200: "MainControl", 500: "Start(메인컨트롤)",
             702: "Lie2StandUp", 706: "Squat<->Stand"}
 
 # 팔 액션 후 팔 제어 반납용 (action_map["release arm"])
@@ -63,6 +68,20 @@ def dds_init(domain, iface):
         ChannelFactoryInitialize(domain)
     else:
         ChannelFactoryInitialize(domain, iface)
+
+
+# SDK 의 RPC 에러 코드 (unitree_sdk2py/rpc/internal.py)
+# 3104 는 '전이 거부'가 아니라 '응답 시간 초과'다 — 통신 문제와 상태 거부를
+# 구분하지 못하면 엉뚱한 곳을 고치게 된다.
+RPC_ERR = {
+    3102: "전송 실패(RPC_ERR_CLIENT_SEND)",
+    3103: "API 미등록(RPC_ERR_CLIENT_API_NOT_REG)",
+    3104: "응답 시간 초과(RPC_ERR_CLIENT_API_TIMEOUT) — 통신 문제",
+    3105: "API 불일치(RPC_ERR_CLIENT_API_NOT_MATCH)",
+    3106: "데이터 오류(RPC_ERR_CLIENT_API_DATA)",
+    3107: "lease 무효(RPC_ERR_CLIENT_LEASE_INVALID)",
+}
+RPC_TIMEOUT = 3104
 
 
 class AbortRun(Exception):
@@ -102,10 +121,12 @@ def countdown(sec, label):
 
 
 def check_code(code, what):
-    if code not in (0, None):
-        raise RealCommandError(
-            f"{what} 거부/실패 (code={code}) — 현재 FSM 에서 허용되지 않는 전이이거나 "
-            f"통신 문제. 멘토 확인.")
+    if code in (0, None):
+        return
+    if code in RPC_ERR:
+        raise RealCommandError(f"{what} 실패 (code={code}) — {RPC_ERR[code]}")
+    raise RealCommandError(
+        f"{what} 거부 (code={code}) — 현재 FSM 에서 허용되지 않는 전이. 멘토 확인.")
 
 
 # ── 실기체 링크 ───────────────────────────────────────────────────────
@@ -113,7 +134,7 @@ class G1Link:
     """LocoClient + G1ArmActionClient 를 반환코드 검사와 함께 묶은 래퍼."""
 
     def __init__(self, iface, domain=0, timeout=10.0, with_arm=True,
-                 with_audio=False, volume=None):
+                 with_audio=False, volume=None, tts=False):
         try:
             from unitree_sdk2py.core.channel import ChannelFactoryInitialize
             from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient
@@ -141,6 +162,7 @@ class G1Link:
 
         # 오디오는 '있으면 좋은' 기능이다 — 실패해도 제어 흐름을 막지 않는다.
         self.audio = None
+        self.tts_enabled = False   # 기본: 우리 TTS 를 쓰지 않는다
         if with_audio:
             try:
                 from unitree_sdk2py.g1.audio.g1_audio_client import AudioClient
@@ -152,14 +174,20 @@ class G1Link:
                 self.audio.tts_index = 1
                 if volume is not None:
                     self.audio.SetVolume(int(volume))
+                self.tts_enabled = bool(tts)
             except Exception as e:
                 print(f"  [오디오] 초기화 실패({e}) — 음성/LED 없이 계속 진행합니다.")
                 self.audio = None
 
     # ── 음성·LED (실패해도 무시 — 제어를 막지 않는다) ────────────────
     def say(self, text, speaker_id=0):
-        """TTS. 로봇이 말하는 동안 블로킹되지 않으므로 대기는 호출측 몫."""
-        if self.audio is None:
+        """TTS — 기본적으로 아무것도 하지 않는다.
+
+        G1 의 TtsMaker 는 한국어를 지원하지 않고 영어 발음도 부정확해서,
+        모드 전환 안내는 **로봇 자체의 내장 음성**에 맡긴다(레디/레귤러 등).
+        우리 문구를 굳이 말하게 하려면 tts=True 로 생성한다.
+        """
+        if self.audio is None or not self.tts_enabled:
             return
         try:
             self.audio.TtsMaker(text, speaker_id)
@@ -200,10 +228,30 @@ class G1Link:
         return f"{f} ({FSM_NAME.get(f, '미상')})"
 
     # ── FSM 전이 (반환 코드 검사 O) ──────────────────────────────────
-    def set_fsm(self, fsm_id, label=None):
-        """SetFsmId 를 직접 호출해 반환 코드를 검사한다."""
+    def set_fsm(self, fsm_id, label=None, retries=2):
+        """SetFsmId 를 직접 호출해 반환 코드를 검사한다.
+
+        무선 링크에서는 RPC 응답이 늦어 3104(시간 초과)가 자주 난다.
+        시간 초과는 '명령이 안 갔다'가 아니라 '답을 못 받았다'는 뜻이므로,
+        FSM 을 다시 읽어 이미 목표 상태면 성공으로 처리하고 아니면 재시도한다.
+        상태 거부(다른 코드)는 재시도해도 소용없으므로 즉시 예외를 던진다.
+        """
         what = label or f"SetFsmId({fsm_id})"
-        check_code(self.loco.SetFsmId(fsm_id), what)
+        for attempt in range(1, retries + 2):
+            code = self.loco.SetFsmId(fsm_id)
+            if code in (0, None):
+                return
+            if code != RPC_TIMEOUT:
+                check_code(code, what)
+            print(f"      [통신] {what} 응답 시간 초과 "
+                  f"(시도 {attempt}/{retries + 1}) — 상태 재확인 중")
+            time.sleep(0.5)
+            if self.fsm() == fsm_id:
+                print(f"      명령은 반영됨 (FSM {fsm_id}) — 응답만 유실된 것으로 판단")
+                return
+        raise RealCommandError(
+            f"{what} — 응답 시간 초과가 {retries + 1}회 반복. 통신 상태를 확인하세요 "
+            f"(무선이면 유선 권장).")
 
     def damp(self):
         self.set_fsm(FSM.DAMP, "Damp")
@@ -276,8 +324,44 @@ class G1Link:
             time.sleep(0.05)
 
 
+def safe_exit(link, reason, damp=False):
+    """빠져나올 때의 수렴점.
+
+    damp=False (기본): 이동 정지 + 팔 반납만 하고 **현재 자세를 유지**한다.
+      서 있는 로봇에 Damp 를 보내면 힘이 빠져 주저앉는다. 균형 제어/잠금 기립
+      상태에서 그냥 멈추는 편이 대개 더 안전하고, 다음 시도도 바로 이어갈 수 있다.
+    damp=True: 명시적으로 Damp 까지 보낸다. 행어가 하중을 받을 준비가 된
+      경우에만 쓴다.
+    """
+    if damp:
+        banner(f"[안전] {reason} → 정지 + Damp 수렴 (행어가 하중을 받는다)")
+    else:
+        banner(f"[안전] {reason} → 이동 정지 · 팔 반납 · 현재 자세 유지")
+    try:
+        link.stop_move()
+    except Exception:
+        pass
+    try:
+        link.release_arm()
+    except Exception:
+        pass
+    if not damp:
+        try:
+            link.led("error")
+        except Exception:
+            pass
+        # 통신이 끊긴 상태에서 여기서 또 RPC 를 걸면 같이 멈춘다 — 실패해도 넘어간다.
+        try:
+            print(f"      현재 FSM: {link.fsm_text()}")
+        except Exception:
+            print("      현재 FSM: 조회 불가(통신 문제)")
+        print("      로봇은 여전히 자세를 유지 중이다 — 필요하면 리모컨으로 Damp.")
+        return
+    safe_damp(link, reason)
+
+
 def safe_damp(link, reason):
-    """어떤 경로로든 빠져나올 때의 마지막 수렴점."""
+    """명시적으로 Damp 까지 보내는 경로. 행어 하중 준비가 됐을 때만."""
     banner(f"[안전] {reason} → 정지 + Damp 수렴 (행어가 하중을 받는다)")
     try:
         link.stop_move()
