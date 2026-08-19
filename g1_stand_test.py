@@ -28,7 +28,7 @@ import sys
 import time
 
 from g1_common import (FSM, AbortRun, G1Link, RealCommandError, banner,
-                       call_text, countdown, gate, safe_exit)
+                       call_text, countdown, gate, manual_confirm, safe_exit)
 
 # 전이 표 — (라벨, FSM ID, 기대 관측값 집합, 최소 안정화[s], 최대 대기[s])
 #
@@ -71,11 +71,26 @@ def do_transition(link, label, fsm_id, expect, settle, timeout):
     print(f"  현재 FSM: {link.fsm_text()}")
     gate(f"멘토 승인 — '{label}' 실행해도 됩니까?")
     text, color = SPEECH.get(fsm_id, (None, None))
-    if text:
-        link.announce(text, color)       # 오디오 없으면 조용히 무시된다
-    link.set_fsm(fsm_id, label)          # ← 반환 코드 검사됨
-    call_text(f"{label} — SetFsmId({fsm_id}) 전송")
-    link.wait_fsm(expect, settle, timeout, label)
+    if color:
+        link.led(color)                  # 안내 음성은 로봇 내장 음성이 담당
+
+    manual = False
+    try:
+        link.set_fsm(fsm_id, label)      # ← 반환 코드 검사됨
+    except RealCommandError as e:
+        if not e.timeout:
+            raise                        # 진짜 거부 — 사람이 확인해도 진행 불가
+        # 응답만 유실된 경우: 명령은 로봇에 도착했을 수 있다. 작업자 판정에 맡긴다.
+        print(f"\n  {e}")
+        if not manual_confirm(label, "응답 시간 초과"):
+            raise AbortRun(f"{label} — 통신 확인 실패, 작업자도 확인 못함")
+        manual = True
+
+    call_text(f"{label} — SetFsmId({fsm_id}) 전송"
+              + ("  [작업자 육안 확인]" if manual else ""))
+    if not manual and not link.wait_fsm(expect, settle, timeout, label):
+        if link.fsm() is None and not manual_confirm(label, "FSM 조회 불가"):
+            raise AbortRun(f"{label} — 상태 확인 실패")
     ans = input(f'[확인] "{label}" 완료를 육안으로 확인했습니까? '
                 f"(y=계속 / 그 외=즉시 Damp) > ").strip().lower()
     if ans != "y":
@@ -92,11 +107,20 @@ def do_regular_mode(link):
     for k, fsm_id in enumerate(REGULAR_CANDIDATES, 1):
         before = link.fsm()
         print(f"\n  시도 {k}/{len(REGULAR_CANDIDATES)} — SetFsmId({fsm_id})")
+        manual = False
         try:
             link.set_fsm(fsm_id, f"레귤러 모드({fsm_id})")
         except RealCommandError as e:
-            print(f"      거부됨: {e}")
-            continue
+            if not e.timeout:
+                print(f"      거부됨: {e}")
+                continue
+            print(f"\n      {e}")
+            if not manual_confirm(REGULAR_LABEL, "응답 시간 초과"):
+                continue
+            manual = True
+        if manual:
+            print("      → 작업자 육안 확인으로 진행")
+            return True
         if link.wait_fsm(REGULAR_EXPECT, REGULAR_SETTLE, REGULAR_TIMEOUT, "레귤러 모드"):
             print(f"      ★ 레귤러 모드 = FSM {link.fsm()} (SetFsmId({fsm_id}))")
             print("        이 값을 REGULAR_CANDIDATES 에 단독으로 남기고 인수인계할 것")

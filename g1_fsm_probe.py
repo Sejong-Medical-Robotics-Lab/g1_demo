@@ -71,7 +71,7 @@ def observe(link, sec, label=""):
 def send(link, fsm_id, sec):
     label = next((d for i, d, _ in CANDIDATES if i == fsm_id), f"FSM {fsm_id}")
     before = link.fsm()
-    print(f"\n  전송 전 FSM: {before}")
+    print(f"\n  전송 전 상태: {link.state_text()}")
     print(f"  → SetFsmId({fsm_id})  [{label}]")
 
     code = link.loco.SetFsmId(fsm_id)
@@ -79,11 +79,17 @@ def send(link, fsm_id, sec):
           f"{'(접수됨 — 단, 실제 전이는 아래 관찰로 판정)' if code == 0 else '(거부)'}")
 
     after = observe(link, sec, f"FSM {fsm_id}")
-    if after == before:
-        print(f"      [결과] 전이 실패 — FSM 이 {before} 에서 안 바뀜. "
-              "현재 상태에서 허용되지 않는 전이일 가능성이 큼.")
-    else:
-        print(f"      [결과] 전이 성공 — {before} → {after}  ★ 기록할 것")
+    print(f"      전송 후 상태: {link.state_text()}")
+
+    # ※ 실기체에서 GetFsmId 가 SetFsmId 의 번호와 일치하지 않는 것이 관측됐다
+    #   (4 로 전이했는데도 200 으로 읽힘). 그래서 조회값만으로는 판정하지 않고,
+    #   눈으로 본 결과를 물어 대응표를 만든다.
+    print("\n      조회값은 SetFsmId 번호와 다를 수 있습니다 — 눈으로 판정하세요.")
+    seen = input("      로봇이 실제로 어떻게 되었습니까? "
+                 "(1=목표 자세로 바뀜 / 2=변화 없음 / 3=다른 자세) > ").strip()
+    verdict = {"1": "목표 자세 도달", "2": "변화 없음", "3": "다른 자세"}.get(seen, "미기록")
+    print(f"\n      ★ 기록: SetFsmId({fsm_id}) → 육안 '{verdict}' / "
+          f"조회 fsm_id={after}, mode={link.fsm_mode()}")
     return after
 
 

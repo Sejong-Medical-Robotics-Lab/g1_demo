@@ -133,12 +133,32 @@ def countdown(sec, label):
     print(" " * 60, end="\r")
 
 
+# SDK 의 RPC 에러 코드 (unitree_sdk2py/rpc/internal.py)
+# 3104 는 전이 거부가 아니라 '응답 시간 초과'다.
+RPC_ERR = {
+    3102: "전송 실패", 3103: "API 미등록",
+    3104: "응답 시간 초과 — 통신 문제(무선이면 유선 권장)",
+    3105: "API 불일치", 3106: "데이터 오류", 3107: "lease 무효",
+}
+
+# arm 서비스가 반환하는 코드 (SDK 에 정의 없음 — 실기체 관측 기록)
+ARM_ERR = {
+    7404: "arm 서비스 거부 — 팔 제어권이 다른 창구(LocoClient WaveHand/ShakeHand)에 "
+          "잡혀 있거나 현재 상태에서 불가. release 후 재시도할 것",
+}
+
+
 def check_code(code, what):
     """모든 명령의 반환 코드를 확인한다 — '거부당하는 코드를 쓰지 않는 것이 목표'(5.1)."""
-    if code not in (0, None):
-        raise RealCommandError(
-            f"{what} 거부/실패 (code={code}) — 현재 FSM에서 허용되지 않는 "
-            f"전이(교재 2.4 상태 기계)이거나 통신 문제. 멘토 확인.")
+    if code in (0, None):
+        return
+    if code in RPC_ERR:
+        raise RealCommandError(f"{what} 실패 (code={code}) — {RPC_ERR[code]}")
+    if code in ARM_ERR:
+        raise RealCommandError(f"{what} 실패 (code={code}) — {ARM_ERR[code]}")
+    raise RealCommandError(
+        f"{what} 거부 (code={code}) — 현재 FSM에서 허용되지 않는 "
+        f"전이(교재 2.4 상태 기계). 멘토 확인.")
 
 
 # ── 실기체 클라이언트 래퍼 ─────────────────────────────────────────────
@@ -266,6 +286,19 @@ class RealG1:
     def wave(self):
         check_code(self.loco.WaveHand(), "WaveHand")
 
+    def release_loco_arm(self):
+        """LocoClient 쪽 팔 태스크 해제.
+
+        WaveHand()/ShakeHand() 는 LocoClient.SetTaskId 로 팔을 잡는다.
+        이 태스크를 쥔 채로 G1ArmActionClient.ExecuteAction 을 부르면
+        arm 서비스가 거부한다(실기체에서 code=7404 관측).
+        두 창구를 섞을 때는 반드시 이 해제를 사이에 넣는다.
+        """
+        try:
+            self.loco.SetTaskId(99)     # 99 = release
+        except Exception:
+            pass
+
     def arm_action(self, name):
         aid = self.action_map.get(name)
         if aid is None:
@@ -355,8 +388,23 @@ def do_transition(robot, label, fsm_id, expect, settle, timeout):
         robot.led(color)
     if text:
         robot.say(text)
-    robot.set_fsm(fsm_id, label)
-    call_text(f"{label} — SetFsmId({fsm_id}) 전송")
+    manual = False
+    try:
+        robot.set_fsm(fsm_id, label)
+    except RealCommandError as e:
+        if not getattr(e, "timeout", False):
+            raise
+        print(f"\n  {e}")
+        print("\n  [수동 확인] 통신으로 확인하지 못했습니다 — 응답 시간 초과.")
+        ans = input(f"           로봇이 실제로 '{label}' 상태입니까? "
+                    "(y=작업자 확인으로 진행 / 그 외=중단) > ").strip().lower()
+        if ans != "y":
+            raise AbortRun(f"{label} — 통신 확인 실패, 작업자도 확인 못함")
+        manual = True
+        print("           → 작업자 육안 확인으로 진행 (기록에 남김)")
+
+    call_text(f"{label} — SetFsmId({fsm_id}) 전송"
+              + ("  [작업자 육안 확인]" if manual else ""))
     t0 = time.monotonic()
     seen = None
     while time.monotonic() - t0 < timeout:
@@ -379,13 +427,34 @@ def do_transition(robot, label, fsm_id, expect, settle, timeout):
         raise AbortRun(f"{label} 육안 확인 실패")
 
 
-def safe_damp(robot, reason):
-    banner(f"[안전] {reason} → Damp 수렴 (행어가 하중을 받는다)")
+def safe_exit(robot, reason, damp=False):
+    """빠져나올 때의 수렴점.
+
+    damp=False (기본): 이동 정지 + 팔 반납만 하고 **현재 자세를 유지**한다.
+      서 있는 로봇에 Damp 를 보내면 힘이 빠져 주저앉는다. 한 동작이 거부됐다고
+      전체를 무너뜨릴 이유는 없고, 원인을 확인한 뒤 이어서 재시도하는 편이 낫다.
+    damp=True: 명시적으로 Damp 까지 보낸다(--exit damp).
+    """
+    banner(f"[안전] {reason} → "
+           + ("Damp 수렴 (행어가 하중을 받는다)" if damp
+              else "이동 정지 · 팔 반납 · 현재 자세 유지"))
     try:
         robot.stop_move()
         robot.release_arm()
     except Exception:
         pass
+    if not damp:
+        try:
+            robot.led("error")
+        except Exception:
+            pass
+        try:
+            f = robot.fsm()
+            print(f"      현재 FSM: {f}")
+        except Exception:
+            print("      현재 FSM: 조회 불가(통신 문제)")
+        print("      로봇은 자세를 유지 중이다 — 필요하면 리모컨으로 Damp.")
+        return
     try:
         robot.damp()
         print("      Damp 전송 완료 — 로봇·행어 상태를 눈으로 확인할 것")
@@ -414,6 +483,8 @@ def main():
     ap.add_argument("--operator", default="-", help="실행자 이름(한 줄 로그용)")
     ap.add_argument("--arm-only", action="store_true",
                     help="전이 생략 — 멘토가 조이스틱으로 이미 균형 제어까지 올린 상태에서 팔 동작만")
+    ap.add_argument("--exit", choices=["keep", "damp"], default="keep",
+                    help="이상 종료 시: keep=자세 유지(기본) / damp=Damp 로 내림")
     ap.add_argument("--audio", action="store_true",
                     help="LED 색으로 상태 표시 (음성은 로봇 내장 음성이 담당)")
     ap.add_argument("--volume", type=int, default=70, help="--audio 볼륨 0~100")
@@ -486,8 +557,12 @@ def main():
                 robot.led("arm")
                 robot.wave()
                 countdown(wait, label)
+                robot.release_loco_arm()     # 다음 arm 액션을 위해 창구 비우기
+                time.sleep(1.0)
             elif how == "arm":
                 robot.led("arm")
+                robot.release_loco_arm()     # loco 쪽이 팔을 쥐고 있으면 7404
+                time.sleep(0.5)
                 robot.arm_action(real)
                 countdown(wait, label)
                 robot.release_arm()          # 팔 제어 반납 — 다음 동작/보행을 위해
@@ -535,16 +610,16 @@ def main():
 
     except KeyboardInterrupt:
         result, abnormal = "중단: Ctrl+C", "유(중단)"
-        safe_damp(robot, "Ctrl+C 중단")
+        safe_exit(robot, "Ctrl+C 중단", damp=(args.exit == "damp"))
     except AbortRun as e:
         result, abnormal = f"중단: {e}", "유(게이트)"
-        safe_damp(robot, str(e))
+        safe_exit(robot, str(e), damp=(args.exit == "damp"))
     except RealCommandError as e:
         result, abnormal = f"거부/실패: {e}", "유(거부)"
-        safe_damp(robot, str(e))
+        safe_exit(robot, str(e), damp=(args.exit == "damp"))
     except Exception as e:
         result, abnormal = f"예외: {type(e).__name__}: {e}", "유(예외)"
-        safe_damp(robot, f"예외 {type(e).__name__}")
+        safe_exit(robot, f"예외 {type(e).__name__}", damp=(args.exit == "damp"))
     finally:
         try:
             append_log(args.operator, plan, result, abnormal, time.monotonic() - t_start)

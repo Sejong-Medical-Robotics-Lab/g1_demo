@@ -89,7 +89,16 @@ class AbortRun(Exception):
 
 
 class RealCommandError(RuntimeError):
-    """실기체 명령이 0이 아닌 코드로 거부됨."""
+    """실기체 명령이 0이 아닌 코드로 거부됨.
+
+    timeout=True 이면 '거부'가 아니라 '응답을 못 받았다'는 뜻이다.
+    이 경우 명령 자체는 로봇에 도착했을 수 있으므로, 작업자의 육안 확인으로
+    진행 여부를 판단할 여지를 남긴다.
+    """
+
+    def __init__(self, msg, timeout=False):
+        super().__init__(msg)
+        self.timeout = timeout
 
 
 # ── 표시 유틸 ─────────────────────────────────────────────────────────
@@ -120,11 +129,28 @@ def countdown(sec, label):
     print(" " * 60, end="\r")
 
 
+def manual_confirm(label, detail=""):
+    """통신으로 확인이 안 될 때, 작업자의 육안 판정을 근거로 삼는다.
+
+    로봇이 실제로는 명령을 받아 상태가 바뀌었는데 응답만 유실되는 일이 잦다.
+    그때 스크립트가 무조건 중단해 버리면 눈앞의 사실과 어긋난다.
+    판단 주체를 사람에게 넘기되, 그 사실을 로그에 남긴다.
+    """
+    print(f"\n  [수동 확인] 통신으로 확인하지 못했습니다{(' — ' + detail) if detail else ''}.")
+    ans = input(f"           로봇이 실제로 '{label}' 상태입니까? "
+                "(y=작업자 확인으로 진행 / 그 외=중단) > ").strip().lower()
+    if ans == "y":
+        print(f"           → 작업자 육안 확인으로 진행 (통신 확인 없음, 기록에 남김)")
+        return True
+    return False
+
+
 def check_code(code, what):
     if code in (0, None):
         return
     if code in RPC_ERR:
-        raise RealCommandError(f"{what} 실패 (code={code}) — {RPC_ERR[code]}")
+        raise RealCommandError(f"{what} 실패 (code={code}) — {RPC_ERR[code]}",
+                               timeout=(code == RPC_TIMEOUT))
     raise RealCommandError(
         f"{what} 거부 (code={code}) — 현재 FSM 에서 허용되지 않는 전이. 멘토 확인.")
 
@@ -213,13 +239,44 @@ class G1Link:
         self.say(text)
 
     # ── 상태 조회 ────────────────────────────────────────────────────
-    def fsm(self):
-        """현재 FSM ID. 조회 실패 시 None (→ 육안 판정으로 대체)."""
+    def fsm(self, retries=2):
+        """현재 FSM ID. 조회 실패 시 None (→ 육안 판정으로 대체).
+
+        무선 링크에서는 GetFsmId(RPC 왕복)가 간헐적으로 실패한다. 한 번 실패했다고
+        None 을 그대로 쓰면 '상태를 모른다'와 '통신이 튀었다'를 구분하지 못하므로
+        몇 번 재시도한다.
+        """
+        for attempt in range(retries + 1):
+            try:
+                code, val = self.loco.GetFsmId()
+                if code == 0:
+                    return val
+            except Exception:
+                pass
+            if attempt < retries:
+                time.sleep(0.3)
+        return None
+
+    def fsm_mode(self):
+        """GetFsmMode(7002) — GetFsmId 와 다른 값이다."""
         try:
-            code, val = self.loco.GetFsmId()
+            code, val = self.loco.GetFsmMode()
             return val if code == 0 else None
         except Exception:
             return None
+
+    def balance_mode(self):
+        """GetBalanceMode(7003)."""
+        try:
+            code, val = self.loco.GetBalanceMode()
+            return val if code == 0 else None
+        except Exception:
+            return None
+
+    def state_text(self):
+        """조회 가능한 상태값을 한 줄로 — 대응표를 만들기 위한 관측용."""
+        return (f"fsm_id={self.fsm()} / fsm_mode={self.fsm_mode()} "
+                f"/ balance={self.balance_mode()}")
 
     def fsm_text(self):
         f = self.fsm()
@@ -237,6 +294,13 @@ class G1Link:
         상태 거부(다른 코드)는 재시도해도 소용없으므로 즉시 예외를 던진다.
         """
         what = label or f"SetFsmId({fsm_id})"
+
+        # 주의: '이미 그 상태면 생략' 같은 최적화를 넣지 말 것.
+        # 실기체에서 GetFsmId 가 SetFsmId 로 보낸 번호와 다른 값을 돌려주는 것이
+        # 관측됐다(4 로 전이한 뒤에도 200 으로 읽힘). 조회값을 근거로 전송을
+        # 건너뛰면 실제로 필요한 전이를 빠뜨린다. 같은 번호를 다시 보내는 것은
+        # 무해하므로 항상 보낸다.
+
         for attempt in range(1, retries + 2):
             code = self.loco.SetFsmId(fsm_id)
             if code in (0, None):
@@ -251,13 +315,18 @@ class G1Link:
                 return
         raise RealCommandError(
             f"{what} — 응답 시간 초과가 {retries + 1}회 반복. 통신 상태를 확인하세요 "
-            f"(무선이면 유선 권장).")
+            f"(무선이면 유선 권장).", timeout=True)
 
     def damp(self):
         self.set_fsm(FSM.DAMP, "Damp")
 
     def wait_fsm(self, expect, settle=3.0, timeout=12.0, label=""):
-        """기대 FSM 도달 대기. 도달하면 True, 시간초과면 False(육안 판정)."""
+        """기대 FSM 도달 대기. 도달하면 True, 시간초과면 False(육안 판정).
+
+        ※ 실기체에서 GetFsmId 의 반환값이 SetFsmId 로 보낸 번호와 일치하지 않는
+          것이 관측됐다. 따라서 이 함수의 결과는 '참고'이지 '판정'이 아니다.
+          최종 판단은 항상 작업자의 육안 확인이다.
+        """
         t0 = time.monotonic()
         seen = None
         while time.monotonic() - t0 < timeout:
