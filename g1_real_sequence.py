@@ -33,6 +33,8 @@ import time
 #     ("action", "wave",     8.0)   시뮬 레지스트리 이름 → 아래 REAL_ACTIONS 로 매핑
 #     ("action", "hands up", 8.0)   실기체 팔 액션 이름 직접 지정도 가능(멘토 승인 필요)
 #     ("hold",   None,       2.0)   동작 없이 관찰 대기
+#     ("move",   (0.2,0,0),  3.0)   보행 — 2단계 단독 검증 후 --enable-walk 로만 허용
+#     ("stop",   None,       2.0)   보행 정지 (move 뒤에는 반드시 stop)
 #
 #   대기시간 근거: 실기체 high-level 에는 시뮬의 ActionActive 같은 '완료 신호'가
 #   없다(→ sim-to-real 관찰 항목). 시뮬 실측 시간 + 2~3초 여유로 잡는다.
@@ -55,18 +57,37 @@ REAL_ACTIONS = {
     "bow":      None,   # 실기체 액션 목록에 대응 동작 없음(사전 검증에서 재확인)
 }
 
-# 전이 프레임 — SDK 버전에 따라 메서드명·FSM 번호가 다르면 '이 표만' 수정한다.
-#   (라벨, 시도할 메서드 후보(앞선 것 우선), 기대 FSM 값 집합, 최소 안정화[s], 최대 대기[s])
+# 전이 프레임 — FSM 번호가 다르면 '이 표만' 수정한다.
+#   (라벨, 보낼 FSM ID, 기대 FSM 값 집합, 최소 안정화[s], 최대 대기[s])
+#
+#   ※ 왜 메서드명이 아니라 FSM ID 인가:
+#     LocoClient.Damp()/Start()/Squat2StandUp() 은 내부에서 SetFsmId() 를 호출하지만
+#     반환값이 없다(None). 그래서 check_code() 가 아무것도 검사하지 못한다.
+#     SetFsmId() 를 직접 부르면 반환 코드를 받아 거부를 실제로 잡을 수 있다.
+#   ※ 706 은 Squat2StandUp 과 StandUp2Squat 이 공유하는 ID(토글)다.
+#     이미 서 있는 상태에서 다시 706 을 보내면 앉는다.
 #   ※ 2026-07 master 기준: Damp=FSM1, Squat2StandUp=706(완료 후 4 보고 가능성),
 #     Start=FSM500 (구버전: StandUp=4, Start=200). FSM 관측값이 다르면 육안 게이트가
 #     최종 판정이며, 관측값을 운영가이드 FAQ 표에 기록해 다음 조에 인수인계한다.
 TRANSITIONS = [
-    ("Damp — 힘 빼기(알려진 안전 상태)", ("Damp",),                    {1},           3.0, 8.0),
-    ("기립 전이(위치잠금 기립)",         ("Squat2StandUp", "StandUp"), {4, 706},      6.0, 15.0),
-    ("메인 컨트롤(균형 제어) 진입",       ("Start",),                   {500, 200},    5.0, 12.0),
+    ("Damp — 힘 빼기(알려진 안전 상태)", 1,   {1},        3.0,  8.0),
+    ("기립 전이(위치잠금 기립)",         706, {4, 706},   6.0, 15.0),
+    ("메인 컨트롤(균형 제어) 진입",       500, {500, 200}, 5.0, 12.0),
 ]
 
+# 보행 안전 상한 — ("move", (vx,vy,vyaw), sec) 행에 적용된다.
+WALK_LIMIT_VX, WALK_LIMIT_VY, WALK_LIMIT_VYAW = 0.3, 0.2, 0.4
+WALK_SEND_PERIOD = 0.2     # 재전송 주기 [s]
+WALK_CMD_DURATION = 0.5    # 명령 유효 시간 [s] — 데드맨. SEND_PERIOD 보다 커야 한다.
+
 LOG_PATH = "g1_session_log.csv"   # 교재 6.4 '한 줄 로그' 자동 기록
+
+# --audio 일 때 쓰는 문구·LED. LED 색은 관객이 상태를 눈으로 알 수 있게 한다.
+LED = {"damp": (255, 0, 0), "standing": (255, 160, 0), "balance": (0, 255, 0),
+       "arm": (0, 120, 255), "walk": (160, 0, 255), "off": (0, 0, 0)}
+SPEECH = {1: ("댐프 모드로 전환합니다.", "damp"),
+          706: ("기립합니다.", "standing"),
+          500: ("균형 제어 상태입니다.", "balance")}
 
 
 # ── 공통 유틸 ──────────────────────────────────────────────────────────
@@ -117,7 +138,8 @@ def check_code(code, what):
 class RealG1:
     """unitree_sdk2py LocoClient + G1ArmActionClient 를 게이트·검사와 함께 묶은 것."""
 
-    def __init__(self, iface, domain=0, timeout=10.0):
+    def __init__(self, iface, domain=0, timeout=10.0, with_audio=False,
+                 volume=70):
         # SDK 임포트를 여기로 미룬다 — --dry-run 은 SDK 없이도 동작해야 한다.
         from unitree_sdk2py.core.channel import ChannelFactoryInitialize
         from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient
@@ -131,6 +153,46 @@ class RealG1:
         self.arm.SetTimeout(timeout)
         self.arm.Init()
         self.action_map = dict(action_map)
+
+        # 오디오는 '있으면 좋은' 기능 — 실패해도 제어 흐름을 막지 않는다.
+        self.audio = None
+        if with_audio:
+            try:
+                from unitree_sdk2py.g1.audio.g1_audio_client import AudioClient
+                self.audio = AudioClient()
+                self.audio.SetTimeout(timeout)
+                self.audio.Init()
+                # SDK 버그 우회: TtsMaker 의 `tts_index += tts_index` 는 0 에서
+                # 시작하면 영원히 0 이다. 1 로 두면 1,2,4,8… 로 증가한다.
+                self.audio.tts_index = 1
+                self.audio.SetVolume(int(volume))
+            except Exception as e:
+                print(f"  [오디오] 초기화 실패({e}) — 음성/LED 없이 진행합니다.")
+                self.audio = None
+
+    def say(self, text):
+        if self.audio is None:
+            return
+        try:
+            self.audio.TtsMaker(text, 0)
+        except Exception:
+            pass
+
+    def led(self, state):
+        if self.audio is None:
+            return
+        rgb = LED.get(state) if isinstance(state, str) else state
+        if rgb is None:
+            return
+        try:
+            self.audio.LedControl(int(rgb[0]), int(rgb[1]), int(rgb[2]))
+        except Exception:
+            pass
+
+    def announce(self, text, state=None):
+        if state:
+            self.led(state)
+        self.say(text)
 
     # 상태 조회 — GetFsmId 는 (code, value) 를 반환한다(2026-07 master 확인).
     def fsm(self):
@@ -153,15 +215,41 @@ class RealG1:
 
     # 개별 호출 (반환 코드 검사 포함)
     def damp(self):
-        check_code(self.loco.Damp(), "Damp")
+        self.set_fsm(1, "Damp")
 
-    def run_method(self, names):
-        for n in names:
-            fn = getattr(self.loco, n, None)
-            if fn is not None:
-                check_code(fn(), n)
-                return n
-        raise RealCommandError(f"이 SDK 버전에 {names} 메서드가 없음 — TRANSITIONS 표 수정 필요")
+    def set_fsm(self, fsm_id, label=None):
+        """SetFsmId 를 직접 호출해 반환 코드를 검사한다.
+
+        Damp()/Start()/Squat2StandUp() 래퍼는 반환값이 없어(None) 거부를 놓친다.
+        """
+        check_code(self.loco.SetFsmId(fsm_id), label or f"SetFsmId({fsm_id})")
+
+    def set_velocity(self, vx, vy, vyaw, duration):
+        """duration 초 동안만 유효한 속도 명령 — 루프가 죽으면 스스로 멈춘다."""
+        check_code(self.loco.SetVelocity(vx, vy, vyaw, duration),
+                   f"SetVelocity({vx:.2f},{vy:.2f},{vyaw:.2f},{duration:.2f})")
+
+    def stop_move(self):
+        """정지 — 실패 가능성을 감안해 3회 반복 전송."""
+        for _ in range(3):
+            try:
+                self.loco.SetVelocity(0.0, 0.0, 0.0, 0.5)
+            except Exception:
+                pass
+            time.sleep(0.05)
+
+    def release_arm(self):
+        """팔 제어 반납(action_map["release arm"]=99).
+
+        보행 전·시퀀스 종료 전에 반드시 호출한다. 팔 액션이 팔을 잡고 있으면
+        보행 중 상체 보상이 방해받는다.
+        """
+        aid = self.action_map.get("release arm")
+        if aid is not None:
+            try:
+                self.arm.ExecuteAction(aid)
+            except Exception:
+                pass
 
     def wave(self):
         check_code(self.loco.WaveHand(), "WaveHand")
@@ -174,7 +262,14 @@ class RealG1:
 
 
 # ── 시퀀스 해석·검증 ───────────────────────────────────────────────────
-def resolve_sequence(seq):
+def clamp(v, lim, name, problems, row):
+    if abs(v) > lim:
+        problems.append(f"{row}행: {name} {v:+.2f} 가 안전 상한 {lim} 초과")
+        return lim if v > 0 else -lim
+    return v
+
+
+def resolve_sequence(seq, enable_walk=False):
     """SEQUENCE 를 실행 계획으로 변환. 금지 행·미지원 동작은 여기서 걸러진다."""
     plan, problems = [], []
     for i, row in enumerate(seq, 1):
@@ -199,9 +294,29 @@ def resolve_sequence(seq):
                 # 실기체 팔 액션 이름을 직접 지정한 경우(시뮬 미검증 → 멘토 승인 대상)
                 plan.append((i, "arm", f"팔 액션 '{arg}' (시뮬 미검증·멘토 승인 필요)",
                              arg, float(wait)))
-        elif kind in ("move", "stop", "standup", "damp"):
+        elif kind == "move":
+            if not enable_walk:
+                problems.append(f"{i}행: 보행 행은 기본 비활성 — 2단계(g1_walk_test.py)"
+                                " 단독 검증을 마친 뒤 --enable-walk 로 실행")
+                continue
+            try:
+                vx, vy, vyaw = (float(v) for v in arg)
+            except Exception:
+                problems.append(f"{i}행: move 인자는 (vx, vy, vyaw) 튜플이어야 함")
+                continue
+            vx = clamp(vx, WALK_LIMIT_VX, "vx", problems, i)
+            vy = clamp(vy, WALK_LIMIT_VY, "vy", problems, i)
+            vyaw = clamp(vyaw, WALK_LIMIT_VYAW, "vyaw", problems, i)
+            plan.append((i, "move", f"보행 vx={vx:+.2f} vy={vy:+.2f} vyaw={vyaw:+.2f}",
+                         (vx, vy, vyaw), float(wait)))
+        elif kind == "stop":
+            if not enable_walk:
+                problems.append(f"{i}행: 'stop' 은 --enable-walk 에서만 유효")
+                continue
+            plan.append((i, "stop", "보행 정지", None, float(wait)))
+        elif kind in ("standup", "damp"):
             problems.append(f"{i}행: '{kind}' 는 학생 SEQUENCE 에서 금지 — "
-                            "전이는 프레임 소관, 보행은 멘토 주도(SOP ⑤)")
+                            "전이는 프레임 소관")
         else:
             problems.append(f"{i}행: 알 수 없는 동작종류 '{kind}'")
     return plan, problems
@@ -220,11 +335,14 @@ def print_plan(plan):
 
 
 # ── 전이 실행 ──────────────────────────────────────────────────────────
-def do_transition(robot, label, methods, expect, settle, timeout):
-    banner(f"전이: {label}")
+def do_transition(robot, label, fsm_id, expect, settle, timeout):
+    banner(f"전이: {label}  (SetFsmId {fsm_id})")
     gate(f"멘토 승인 — '{label}' 실행해도 됩니까?")
-    used = robot.run_method(methods)
-    call_text(f"{label} — {used} 전송")
+    text, color = SPEECH.get(fsm_id, (None, None))
+    if text:
+        robot.announce(text, color)
+    robot.set_fsm(fsm_id, label)
+    call_text(f"{label} — SetFsmId({fsm_id}) 전송")
     t0 = time.monotonic()
     seen = None
     while time.monotonic() - t0 < timeout:
@@ -249,6 +367,11 @@ def do_transition(robot, label, methods, expect, settle, timeout):
 
 def safe_damp(robot, reason):
     banner(f"[안전] {reason} → Damp 수렴 (행어가 하중을 받는다)")
+    try:
+        robot.stop_move()
+        robot.release_arm()
+    except Exception:
+        pass
     try:
         robot.damp()
         print("      Damp 전송 완료 — 로봇·행어 상태를 눈으로 확인할 것")
@@ -277,13 +400,18 @@ def main():
     ap.add_argument("--operator", default="-", help="실행자 이름(한 줄 로그용)")
     ap.add_argument("--arm-only", action="store_true",
                     help="전이 생략 — 멘토가 조이스틱으로 이미 균형 제어까지 올린 상태에서 팔 동작만")
+    ap.add_argument("--audio", action="store_true",
+                    help="각 단계에서 음성 안내 + LED 색 표시(데모용)")
+    ap.add_argument("--volume", type=int, default=70, help="--audio 볼륨 0~100")
+    ap.add_argument("--enable-walk", action="store_true",
+                    help="SEQUENCE 의 move/stop 행 허용 — 2단계 단독 검증 완료 후에만")
     ap.add_argument("--dry-run", action="store_true", help="설계 리뷰만(로봇·SDK 불필요)")
     ap.add_argument("--list-actions", action="store_true",
                     help="SDK action_map + 실기체 GetActionList 대조 출력 후 종료")
     args = ap.parse_args()
 
     banner("과제 2 — 상체 모션 시퀀스 (실기체 · 행어 · 멘토 확인 하)")
-    plan, problems = resolve_sequence(SEQUENCE)
+    plan, problems = resolve_sequence(SEQUENCE, enable_walk=args.enable_walk)
     print_plan(plan)
     if problems:
         print("\n  [설계 문제 — 실행 불가]")
@@ -303,9 +431,12 @@ def main():
     gate("SOP ② 행어 거치 확인 콜(멘토) 완료했습니까? — 발은 지면, 하중은 다리, 스트랩은 느슨")
     gate("멘토가 리모컨(비상 Damp) 소지 중이고, 즉시 조작 가능한 위치입니까?")
     gate("모니터링 담당이 g1_real_monitor.py watch 가동 중입니까? (교재 6.3)")
+    if args.enable_walk:
+        gate("[보행 포함] 진행 방향에 사람·장애물이 없고 공간이 확보되었습니까?")
 
     try:
-        robot = RealG1(args.iface, args.domain)
+        robot = RealG1(args.iface, args.domain, with_audio=args.audio,
+                       volume=args.volume)
     except ImportError as e:
         sys.exit("unitree_sdk2py 를 찾을 수 없습니다 — 운영가이드 0장 설치 절차 참조.\n"
                  f"(원인: {e})")
@@ -326,8 +457,8 @@ def main():
             print(f"\n  --arm-only 모드: 현재 FSM = {f if f is not None else '조회 불가'}")
             gate("멘토 확인 — 로봇이 이미 '균형 제어(메인 컨트롤)' 상태입니까?")
         else:
-            for label, methods, expect, settle, timeout in TRANSITIONS:
-                do_transition(robot, label, methods, expect, settle, timeout)
+            for label, fsm_id, expect, settle, timeout in TRANSITIONS:
+                do_transition(robot, label, fsm_id, expect, settle, timeout)
                 if label.startswith("Damp"):
                     call_text("Damp 확인 — 상태 정상 콜 요청")           # SOP ③
                     gate("모니터링 담당의 '상태 정상' 콜을 받았습니까?")
@@ -336,16 +467,41 @@ def main():
         for i, how, label, real, wait in plan:
             print(f"\n  [{i}/{len(plan)}] {label}")
             if how == "hold":
-                pass
+                countdown(wait, label)
             elif how == "loco_wave":
+                robot.announce("인사하겠습니다.", "arm")
                 robot.wave()
+                countdown(wait, label)
             elif how == "arm":
+                robot.led("arm")
                 robot.arm_action(real)
-            countdown(wait, label)
+                countdown(wait, label)
+                robot.release_arm()          # 팔 제어 반납 — 다음 동작/보행을 위해
+                print("      release arm 전송")
+            elif how == "move":
+                robot.announce("이동하겠습니다.", "walk")
+                robot.release_arm()          # 보행 전 팔 반납
+                vx, vy, vyaw = real
+                t_end = time.monotonic() + wait
+                while time.monotonic() < t_end:
+                    robot.set_velocity(vx, vy, vyaw, WALK_CMD_DURATION)
+                    remain = t_end - time.monotonic()
+                    print(f"      … 보행 남은 {max(remain, 0):4.1f}s   ",
+                          end="\r", flush=True)
+                    time.sleep(min(WALK_SEND_PERIOD, max(remain, 0.01)))
+                print(" " * 60, end="\r")
+                robot.stop_move()            # 구간 끝에서 항상 정지
+            elif how == "stop":
+                robot.led("balance")
+                robot.stop_move()
+                countdown(wait, label)
             f = robot.fsm()
             if f is not None:
                 print(f"      현재 FSM: {f}")
 
+        robot.stop_move()
+        robot.release_arm()
+        robot.announce("시연을 마칩니다. 감사합니다.", "balance")
         call_text("시퀀스 완료")
         result = f"정상 완료 ({len(plan)}행)"
 
@@ -355,6 +511,7 @@ def main():
                       "(다음 실행자 대기) > ").strip().lower()
             if c == "d":
                 gate("멘토 승인 — Damp 로 종료합니까? (행어 스트랩 하중 확인 준비)")
+                robot.announce("댐프 모드로 종료합니다.", "damp")
                 robot.damp()
                 call_text("Damp 확인 — 종료 절차 진행")
                 break
