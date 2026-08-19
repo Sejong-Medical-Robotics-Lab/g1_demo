@@ -132,8 +132,9 @@ def main():
 
     print(f"\n  현재 FSM: {link.fsm_text()}")
     f = link.fsm()
-    if f is not None and f != FSM.START:
-        print(f"  [경고] 균형 제어(FSM {FSM.START})가 아닙니다 — 보행 명령이 거부될 수 있습니다.")
+    if f is not None and f not in (FSM.REGULAR, FSM.MAIN_CONTROL):
+        print(f"  [경고] 레귤러 모드(FSM {FSM.REGULAR})가 아닙니다 — "
+              "보행 명령이 거부될 수 있습니다.")
 
     gate("보행 공간이 확보되어 있고, 진행 방향에 사람·장애물이 없습니까?")
     gate("행어/안전 확보 상태이고 멘토가 비상 Damp 를 즉시 누를 수 있습니까?")

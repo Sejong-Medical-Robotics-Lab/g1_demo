@@ -41,9 +41,8 @@ import time
 #   전이(Damp·기립·균형)와 종료는 아래 프레임이 멘토 게이트와 함께 수행하므로
 #   여기에는 상체 동작 행만 적는다. move/stop/standup/damp 행은 거부된다.
 SEQUENCE = [
-    ("action", "wave",     8.0),   # 손 흔들기 (시뮬 검증 완료분)
-    ("hold",   None,       2.0),   # 안정화 관찰 — 하체·허리 보상 보기(교재 2.2)
     ("action", "hands_up", 8.0),   # 양팔 들기
+    ("hold",   None,       2.0)
 ]
 # ══════════════════════════════════════════════════════════════════════
 
@@ -72,11 +71,15 @@ REAL_ACTIONS = {
 #   실기체 관측으로 확정한 사슬: 0(전원 인가) → 1(Damp) → 4(Lock Stand) → 500/200
 #   706 은 Damp 직후 거부된다(코드 0 을 반환해도 FSM 이 안 바뀜) — 기립은 4 다.
 #   SDK 에 4 의 래퍼가 없어 SetFsmId(4) 로 직접 보낸다.
-#   ★ 실기체 실측(2026-08): 레귤러 모드 = FSM 200. Start()(=500)는 통하지 않는다.
+#   ★ 실기체 실측(2026-08) — 확정 사슬: 1 Damp → 4 Lock Stand → 501 레귤러
+#     501 이어야 보행과 팔 액션이 모두 된다.
+#     200 은 보행만 되고 팔 액션은 code=7404 로 거부된다.
+#     500 은 이 기체에서 전이 자체가 안 된다.
+#     SDK 에 501 래퍼가 없어 SetFsmId(501) 로 직접 보낸다.
 TRANSITIONS = [
-    ("Damp — 힘 빼기(알려진 안전 상태)", 1,   {1},        3.0,  8.0),
-    ("Lock Stand — 잠금 기립(레디)",      4,   {4},        6.0, 15.0),
-    ("레귤러 모드(메인 컨트롤) 진입",      200, {200, 500}, 5.0, 12.0),
+    ("Damp — 힘 빼기(알려진 안전 상태)", 1,   {1},   3.0,  8.0),
+    ("Lock Stand — 잠금 기립(레디)",      4,   {4},   6.0, 15.0),
+    ("레귤러 모드 진입 (보행 + 팔 액션)",   501, {501}, 5.0, 12.0),
 ]
 
 # 보행 안전 상한 — ("move", (vx,vy,vyaw), sec) 행에 적용된다.
@@ -91,10 +94,9 @@ LED = {"damp": (255, 0, 0), "standing": (255, 160, 0), "balance": (0, 255, 0),
        "arm": (0, 120, 255), "walk": (160, 0, 255), "off": (0, 0, 0)}
 # 상태별 LED 색. 음성 안내는 로봇 내장 음성이 담당한다 —
 # G1 의 TtsMaker 는 한국어를 지원하지 않고 영어 발음도 부정확하다.
-SPEECH = {1: (None, "damp"),
-          4: (None, "standing"),
-          200: (None, "balance"),
-          500: (None, "balance")}
+SPEECH = {1: (None, "damp"), 4: (None, "standing"),
+          200: (None, "balance"), 500: (None, "balance"),
+          501: (None, "balance")}
 
 
 # ── 공통 유틸 ──────────────────────────────────────────────────────────
@@ -273,9 +275,12 @@ class RealG1:
     def release_arm(self):
         """팔 제어 반납(action_map["release arm"]=99).
 
+
         보행 전·시퀀스 종료 전에 반드시 호출한다. 팔 액션이 팔을 잡고 있으면
         보행 중 상체 보상이 방해받는다.
         """
+        if self.skip_release:
+            return
         aid = self.action_map.get("release arm")
         if aid is not None:
             try:
@@ -286,6 +291,8 @@ class RealG1:
     def wave(self):
         check_code(self.loco.WaveHand(), "WaveHand")
 
+    skip_release = False    # --no-release 로 켜면 해제 호출을 하지 않는다
+
     def release_loco_arm(self):
         """LocoClient 쪽 팔 태스크 해제.
 
@@ -294,8 +301,10 @@ class RealG1:
         arm 서비스가 거부한다(실기체에서 code=7404 관측).
         두 창구를 섞을 때는 반드시 이 해제를 사이에 넣는다.
         """
+        if self.skip_release:
+            return
         try:
-            self.loco.SetTaskId(99)     # 99 = release
+            self.loco.SetTaskId(99)     # 99 = release (추정값 — 미검증)
         except Exception:
             pass
 
@@ -483,6 +492,9 @@ def main():
     ap.add_argument("--operator", default="-", help="실행자 이름(한 줄 로그용)")
     ap.add_argument("--arm-only", action="store_true",
                     help="전이 생략 — 멘토가 조이스틱으로 이미 균형 제어까지 올린 상태에서 팔 동작만")
+    ap.add_argument("--no-release", action="store_true",
+                    help="팔 제어권 해제 호출을 전혀 하지 않음 — 해제 자체가 "
+                         "7404 의 원인인지 가릴 때 사용")
     ap.add_argument("--exit", choices=["keep", "damp"], default="keep",
                     help="이상 종료 시: keep=자세 유지(기본) / damp=Damp 로 내림")
     ap.add_argument("--audio", action="store_true",
@@ -522,6 +534,7 @@ def main():
     try:
         robot = RealG1(args.iface, args.domain, with_audio=args.audio,
                        volume=args.volume)
+        robot.skip_release = args.no_release
     except ImportError as e:
         sys.exit("unitree_sdk2py 를 찾을 수 없습니다 — 운영가이드 0장 설치 절차 참조.\n"
                  f"(원인: {e})")

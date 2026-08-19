@@ -87,14 +87,40 @@ source /opt/ros/jazzy/setup.bash
 
 | 항목 | 값 |
 |---|---|
-| 전이 사슬 | `0(전원) → 1 Damp → 4 Lock Stand → 200 레귤러 모드` |
-| 레귤러 모드 | **FSM 200** — 조이스틱 R1+Y 와 같은 모드 |
-| `Start()` (=500) | **통하지 않음** — FSM 이 4 에서 바뀌지 않는다 |
+| 전이 사슬 | `0(전원) → 1 Damp → 4 Lock Stand → 501 레귤러 모드` |
+| **레귤러 모드** | **FSM 501** — 보행 + 팔 액션이 모두 되는 상태 |
+| FSM 200 | 보행은 되지만 **팔 액션은 거부(code=7404)** |
+| `Start()` (=500) | **통하지 않음** — 전이 자체가 안 된다 |
 | `Squat2StandUp()` (=706) | Damp 직후 거부됨 — 기립 경로는 4 |
 | Lock Stand(4) | SDK 에 래퍼 없음 — `SetFsmId(4)` 직접 호출 |
 | TTS | 한국어 미지원, 영어도 부정확 → **로봇 내장 음성 사용** |
 
-보행·팔 액션은 FSM 200 에서만 동작한다.
+### FSM 200 vs 501 — 7404 의 원인
+
+`GetActionList` 응답을 보면 각 액션에 실행 조건이 붙어 있다:
+
+```
+{'fsm': [500, 501], 'id': 1, 'name': 'turn_back_wave'}
+{'id': 20, 'mode_machine': [5, 6], 'name': 'make_heart_with_both_hands'}
+```
+
+팔 액션은 501 을 요구한다. FSM 200 에서 `ExecuteAction` 을 부르면
+**code=7404** 로 거부된다 — arm 서비스가 죽은 것이 아니라 상태가 안 맞는 것이다
+(`GetActionList` 자체는 200 에서도 code=0 으로 정상 응답한다).
+
+### GetActionList 가 SDK action_map 보다 많다
+
+실기체는 SDK 에 없는 액션도 보고한다:
+
+| ID | 이름 |
+|---|---|
+| 28~30 | box_left/right/both_hand_win |
+| 33 | right_hand_on_heart |
+| 34 | both_hands_up_deviate_right |
+| 36 | forward_push |
+
+두 번째 배열은 댄스 모션이다 — `Waist_Drum_Dance`(9.5s), `Scratch_head`(8.1s),
+`Spin_discs`(6.9s), `Throw_money`(8.1s). 데모에 쓸 수 있다.
 
 ## 음성 · LED (`--audio`)
 

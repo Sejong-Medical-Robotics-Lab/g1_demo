@@ -27,15 +27,17 @@ class FSM:
     SQUAT = 2            # 래퍼 없음
     SIT = 3              # Sit()
     LOCK_STAND = 4       # ★ 잠금 기립 — SDK 에 래퍼가 없어 SetFsmId(4) 로 직접 보낸다
-    MAIN_CONTROL = 200   # 래퍼 없음 — Start() 가 안 통할 때의 대안
-    START = 500          # Start() — 메인 컨트롤(균형 제어)
+    MAIN_CONTROL = 200   # 래퍼 없음 — 보행은 되지만 팔 액션은 거부(7404)된다
+    START = 500          # Start()
+    REGULAR = 501        # ★ 레귤러 모드 — 보행 + 팔 액션이 모두 되는 상태.
+                         #   SDK 에 래퍼가 없어 SetFsmId(501) 로 직접 보낸다.
     LIE2STANDUP = 702    # Lie2StandUp()
     SQUAT_TOGGLE = 706   # Squat2StandUp() / StandUp2Squat() — 같은 ID(토글!)
                          # Damp 직후에는 거부된다. 반드시 LOCK_STAND 를 거친 뒤에 쓴다.
 
 
 FSM_NAME = {0: "ZeroTorque", 1: "Damp", 2: "Squat", 3: "Sit", 4: "LockStand(잠금기립)",
-            200: "MainControl", 500: "Start(메인컨트롤)",
+            200: "MainControl(보행만)", 500: "Start", 501: "Regular(레귤러 — 보행+팔)",
             702: "Lie2StandUp", 706: "Squat<->Stand"}
 
 # 팔 액션 후 팔 제어 반납용 (action_map["release arm"])

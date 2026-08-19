@@ -47,22 +47,28 @@ TRANSITIONS = [
 # 레귤러 모드 = 조이스틱 R1+Y 로 들어가는 그 모드 = SDK 의 메인 컨트롤.
 # 보행과 팔 액션은 이 상태에서만 동작하므로 기본 사슬에 포함한다.
 #
-# ★ 실기체 실측(2026-08): 레귤러 모드 = FSM 200.
-#   SDK 의 Start()(=500)는 이 기체에서 통하지 않는다(FSM 이 4 에서 안 바뀜).
-#   따라서 200 을 쓰고, 500 은 다른 기체·펌웨어를 위한 예비 후보로만 남긴다.
-REGULAR_LABEL = "레귤러 모드(메인 컨트롤) 진입 — R1+Y 와 같은 모드"
-REGULAR_CANDIDATES = [FSM.MAIN_CONTROL]              # 확정값 200 (예비: FSM.START=500)
-REGULAR_EXPECT = {200, 500}
+# ★ 실기체 실측(2026-08) — 확정 사슬:  1 Damp → 4 Lock Stand → 501 레귤러
+#
+#   501 이어야 보행과 팔 액션이 '모두' 된다.
+#     200 : 보행은 되지만 팔 액션은 거부(code=7404)
+#     500 : 이 기체에서 전이 자체가 안 됨
+#   근거: GetActionList 응답의 액션에 실행 조건이 붙어 있고
+#         (예: turn_back_wave → 'fsm': [500, 501]), 실측에서 501 만 통했다.
+#   SDK 의 LocoClient 에는 501 래퍼가 없어 SetFsmId(501) 로 직접 보낸다.
+REGULAR_LABEL = "레귤러 모드 진입 — R1+Y 와 같은 모드 (보행 + 팔 액션)"
+REGULAR_CANDIDATES = [FSM.REGULAR]                   # 확정값 501
+REGULAR_EXPECT = {501}
 REGULAR_SETTLE, REGULAR_TIMEOUT = 5.0, 12.0
 
 ARM_DEMO = "hands up"   # --with-arm 일 때 실행할 팔 액션
 
 # --audio 일 때 각 전이에서 말할 문구·LED (FSM ID → (문구, LED 상태))
 SPEECH = {
-    1:   ("댐프 모드로 전환합니다.", "damp"),
-    4:   ("기립합니다.",             "standing"),
-    200: ("균형 제어 상태입니다.",    "balance"),
-    500: ("균형 제어 상태입니다.",    "balance"),
+    1:   (None, "damp"),
+    4:   (None, "standing"),
+    200: (None, "balance"),
+    500: (None, "balance"),
+    501: (None, "balance"),
 }
 
 

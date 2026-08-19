@@ -29,18 +29,30 @@ from g1_common import FSM, G1Link, banner, gate
 RELEASE_TASK_ID = 99      # loco 쪽 팔 태스크 해제
 
 
+SKIP_RELEASE = False    # --no-release 로 켜면 해제 호출을 아예 하지 않는다
+
+
 def release_all(link, note=True):
-    """두 창구 모두 팔 제어권을 놓게 한다."""
+    """두 창구 모두 팔 제어권을 놓게 한다.
+
+    ※ loco 쪽 SetTaskId(99) 는 '99 = release' 라는 추정에 기반한 것이고
+      실기체에서 검증된 값이 아니다. 잘못된 task id 를 보내면 오히려 arm
+      서비스를 막을 수 있으므로, --no-release 로 건너뛰고 비교할 수 있게 한다.
+    """
+    if SKIP_RELEASE:
+        print("  (해제 호출 건너뜀 — --no-release)")
+        return
     if note:
         print("  팔 제어권 해제 —", end=" ")
     try:
-        link.loco.SetTaskId(RELEASE_TASK_ID)    # loco 창구
-        print("loco SetTaskId(99)", end=" ")
+        code = link.loco.SetTaskId(RELEASE_TASK_ID)   # loco 창구
+        print(f"loco SetTaskId(99) code={code}", end=" ")
     except Exception as e:
         print(f"loco 실패({e})", end=" ")
     try:
-        link.release_arm()                      # arm 창구 (action 99)
-        print("/ arm release")
+        aid = link.action_map.get("release arm")
+        code = link.arm.ExecuteAction(aid)            # arm 창구 (action 99)
+        print(f"/ arm release code={code}")
     except Exception as e:
         print(f"/ arm 실패({e})")
     time.sleep(1.0)
@@ -74,17 +86,23 @@ def main():
     ap.add_argument("--sequence", action="store_true",
                     help="wave → 해제 → hands up 순으로 가설 검증")
     ap.add_argument("--release", action="store_true", help="팔 제어권 해제만")
+    ap.add_argument("--no-release", action="store_true",
+                    help="해제 호출을 전혀 하지 않고 액션만 보냄 — "
+                         "해제 자체가 원인인지 가리는 용도")
     ap.add_argument("--wait", type=float, default=8.0, help="동작 관찰 시간")
     args = ap.parse_args()
+
+    global SKIP_RELEASE
+    SKIP_RELEASE = args.no_release
 
     banner("팔 액션 진단 — 두 창구(loco / arm) 충돌 확인")
     link = G1Link(args.iface, args.domain, with_arm=True)
 
     f = link.fsm()
     print(f"\n  현재 FSM: {link.fsm_text()}")
-    if f is not None and f != FSM.MAIN_CONTROL:
-        print(f"  [경고] 레귤러 모드(FSM {FSM.MAIN_CONTROL})가 아닙니다 — "
-              "팔 액션이 거부될 수 있습니다.")
+    if f is not None and f != FSM.REGULAR:
+        print(f"  [경고] 레귤러 모드(FSM {FSM.REGULAR})가 아닙니다 — "
+              f"팔 액션은 501 에서만 동작합니다(200 에서는 code=7404).")
 
     if args.list:
         print("\n  SDK action_map:")
