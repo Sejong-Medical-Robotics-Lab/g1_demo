@@ -190,11 +190,32 @@ ROS 2 Jazzy 는 cyclonedds 0.10.4, Unitree SDK 는 0.10.2 를 쓴다. ROS 를 so
 echo "[$ROS_DISTRO]"    # 제어 터미널에서는 [] 여야 한다
 ```
 
+## LiDAR — MID-360s 다
+
+이 기체의 LiDAR 는 일반 MID-360 이 **아니라 MID-360s** 다. 설정 파일과 launch
+파일이 서로 다르고, 잘못 쓰면 드라이버가 `Init lds lidar success!` 까지만 찍고
+조용히 멈춘다(RViz 비어 있음).
+
+```bash
+ros2 launch livox_ros_driver2 rviz_MID360s_launch.py     # ← s 가 붙는다
+```
+
+확정값: LiDAR `192.168.123.120` / 호스트 `192.168.123.51` / `roll: 180`(거꾸로 장착)
+/ `lidar_type: 8` 고정(프로토콜 인덱스, 수정 금지).
+자세한 내용과 문제 해결 순서는 [SETUP.md](SETUP.md) 5장.
+
+| 토픽 | 주파수 |
+|---|---|
+| `/livox/lidar` (PointCloud2) | 10 Hz |
+| `/livox/imu` | 200 Hz |
+
 ## 로봇 연결 후 확정해야 할 값
 
 - [ ] 기립 완료 시 실제 FSM 관측값 (`4` 인지 `706` 인지)
 - [ ] 균형 제어 진입 시 실제 FSM 관측값 (`500` 인지 `200` 인지)
 - [ ] `GetActionList` 실기체 응답 ↔ SDK `action_map` 대조
 - [ ] 관절 수 (`g1_real_monitor.py --joints`, 기본 29)
-- [ ] LiDAR IP (`ip neigh`), Jetson(`192.168.123.164`) OS·ROS 배포판
-- [ ] TTS 지원 언어(한국어 되는지)와 문장별 재생 소요 시간
+- [x] LiDAR IP → `192.168.123.120`, 모델 → **MID-360s**
+- [x] Jetson(`192.168.123.164`) → Ubuntu 20.04 + ROS Foxy
+- [x] TTS → 한국어 미지원, 영어도 부정확 → 로봇 내장 음성 사용
+- [ ] 깊이 카메라(RealSense) — Jetson 쪽 노드 실행 후 PC 에서 구독, 미검증
