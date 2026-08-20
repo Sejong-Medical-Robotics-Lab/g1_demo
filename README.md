@@ -14,6 +14,11 @@
 | `g1_imu_view.py` | 전체 | 내장 IMU 실시간 확인 (읽기 전용) |
 | `g1_audio_test.py` | 전체 | 스피커(TTS)·LED 확인 — 관절 명령 없음 |
 | `g1_real_monitor.py` | 전체 | 기존 모니터 (precheck / baseline / watch) |
+| `g1_fsm_probe.py` | 1 | FSM 번호를 하나씩 보내 전이 사슬을 실측 |
+| `g1_arm_probe.py` | 1·2 | 팔 액션 진단 · 순회(`--tour`) |
+| `g1_slam.launch.py` | 4 | 2D SLAM(slam_toolbox) — 3D 로 갔으므로 참고용 |
+
+문서: [PROGRESS.md](PROGRESS.md) 진행 상황·확정값 · [SETUP.md](SETUP.md) 환경 구축 · [SDK_API.md](SDK_API.md) SDK 레퍼런스
 
 ## 터미널 구성
 
@@ -29,9 +34,16 @@ source ~/g1_real/g1_env.sh
 python3 ~/g1_real/g1_real_monitor.py watch --iface $G1_IFACE
 ```
 
-**터미널 C — ROS 2 (4단계 이후, venv 와 섞지 말 것)**
+**터미널 C — LiDAR (venv 와 섞지 말 것)**
 ```bash
-source /opt/ros/jazzy/setup.bash
+lidar
+ros2 launch livox_ros_driver2 msg_MID360s_launch.py
+```
+
+**터미널 D — 3D SLAM**
+```bash
+slam
+ros2 launch fast_lio mapping.launch.py config_file:=mid360s.yaml
 ```
 
 ## 진행 순서
@@ -190,6 +202,33 @@ ROS 2 Jazzy 는 cyclonedds 0.10.4, Unitree SDK 는 0.10.2 를 쓴다. ROS 를 so
 echo "[$ROS_DISTRO]"    # 제어 터미널에서는 [] 여야 한다
 ```
 
+## 3D SLAM — FAST-LIO
+
+MID-360s 포인트 + 내장 IMU 로 오도메트리를 스스로 만들어낸다. G1 의 보행
+오도메트리 없이도 위치 추정이 되므로 휴머노이드에 적합하다.
+
+```bash
+# 터미널 C
+lidar
+ros2 launch livox_ros_driver2 msg_MID360s_launch.py    # ← msg_ (CustomMsg)
+
+# 터미널 D
+slam
+ros2 launch fast_lio mapping.launch.py config_file:=mid360s.yaml
+```
+
+핵심 세 가지:
+
+- **Jazzy 빌드는 C++17 로 올려야 한다** — 저장소가 C++14 기준이라 `rclcpp` 와 충돌
+- **입력은 CustomMsg** — `rviz_` 가 아니라 **`msg_`** launch 를 쓴다
+- **방향 보정은 드라이버 `roll: 180` 에서만** — FAST-LIO 의 `extrinsic_R` 로는
+  맵 방향이 바뀌지 않는다
+
+방향 확인은 **팔을 흔들어서** 한다. 위로 올렸을 때 맵에서도 위로 그려지면 맞다.
+RViz 화면의 좌우로 판단하면 카메라 위치 때문에 거울처럼 뒤집혀 보인다.
+
+자세한 내용은 [SETUP.md](SETUP.md) 6장.
+
 ## LiDAR — MID-360s 다
 
 이 기체의 LiDAR 는 일반 MID-360 이 **아니라 MID-360s** 다. 설정 파일과 launch
@@ -218,4 +257,6 @@ ros2 launch livox_ros_driver2 rviz_MID360s_launch.py     # ← s 가 붙는다
 - [x] LiDAR IP → `192.168.123.120`, 모델 → **MID-360s**
 - [x] Jetson(`192.168.123.164`) → Ubuntu 20.04 + ROS Foxy
 - [x] TTS → 한국어 미지원, 영어도 부정확 → 로봇 내장 음성 사용
+- [x] 3D SLAM (FAST-LIO) 동작 확인 — 정지 상태 맵 생성까지
+- [ ] 보행하면서 맵이 확장되는지 (2단계 보행 검증이 선행되어야 함)
 - [ ] 깊이 카메라(RealSense) — Jetson 쪽 노드 실행 후 PC 에서 구독, 미검증
