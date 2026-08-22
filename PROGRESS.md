@@ -2,6 +2,18 @@
 
 마지막 갱신: 2026-08-22
 
+## 데모 시나리오 (B조 공식)
+
+| 단계 | 내용 |
+|---|---|
+| 1 | G1 기본 기능 및 상태 전이 확인 |
+| 2 | LiDAR 시각화 및 기본 보행 |
+| 3 | 사전 생성 SLAM 지도 기반 Nav 자율주행 (3층 복도) |
+| 4 | MediaPipe Pose 기반 사람 행동 인식 및 대응 동작 |
+
+**3단계와 4단계는 동시에 수행하지 않는다.** 각각 독립된 단계로 시연한다.
+4단계는 모방이 아니라 **미리 정의된 동작 대응**이다.
+
 ## 단계별 현황
 
 | 단계 | 내용 | 상태 |
@@ -13,8 +25,9 @@
 | 확장 | 3D SLAM (FAST-LIO) | ✅ 동작 확인, 맵 저장까지 |
 | 확장 | `/cmd_vel` 브리지 | ✅ 로봇이 ROS 명령으로 걷는 것 확인 |
 | 확장 | 2D SLAM (slam_toolbox) | ✅ 지도 생성 확인 |
-| 확장 | **Nav2 자율주행** | 진행 중 — 위치 추정 안정화가 관건 |
-| 확장 | 깊이 카메라 (RealSense) | 보류 — **Jetson USB 에 카메라 미인식** |
+| 확장 | **Nav2 자율주행** | 진행 중 — 좋은 2D 지도 확보가 관건 |
+| 확장 | RealSense 카메라 연결 | ✅ MJPEG 스트리밍으로 PC 에서 영상 수신 |
+| 확장 | MediaPipe 자세 인식 → 팔 동작 | ✅ 동작 확인 |
 
 원래 목표였던 4단계를 넘어 SLAM 까지 왔지만, **2단계 보행이 비어 있다.**
 SLAM 데모에서 로봇이 실제로 걸으려면 이것이 선행되어야 하고,
@@ -45,6 +58,24 @@ SLAM 데모에서 로봇이 실제로 걸으려면 이것이 선행되어야 하
 | `g1_cmdvel_bridge.py` | `/cmd_vel` → `SetVelocity()` → 로봇 |
 
 실행 순서는 `NAV2_GUIDE.md` 참고.
+
+### 카메라·자세 인식 확정값
+
+- **ROS 를 쓰지 않는다.** Jetson(Foxy 2020)과 PC(Jazzy 2024)를 같은 도메인에
+  두면 `Deserialization of data failed → std::bad_alloc` 으로 카메라 노드가
+  죽는다. **토픽 이름은 보이지만 데이터는 못 주고받는다.**
+  → Jetson 이 MJPEG(HTTP 8080)으로 영상만 넘기고 PC 가 인식한다
+- **MediaPipe 는 aarch64 에 설치가 어렵다.** 공식 wheel 이 x86_64 와
+  라즈베리파이용뿐이다. PC(x86_64)에서는 `pip install` 한 줄
+- **`mediapipe==0.10.14` 로 버전을 못 박는다.** 최신 1.0.x 에는
+  `mp.solutions` 가 없다(Tasks API 로 이전)
+- Jetson 은 유선(eth0)으로 인터넷이 안 된다. **내장 WiFi(wlan0)** 를 쓰면
+  `git clone`·`apt` 가 된다. 단 **ROS 2 Foxy 저장소는 EOL 로 404** 라
+  `ros-foxy-*` 패키지는 못 받고 소스 빌드로만 가능
+- `librealsense v2.55.1`, `realsense-ros ros2-legacy` 브랜치
+- RealSense 는 `/dev/video*` 를 여러 개 만든다. 컬러는 하나뿐이고
+  나머지는 깊이·적외선이다. `g1_cam_server.py` 가 자동 판별한다
+- 팔 액션은 **FSM 501** 에서만 동작. 200 이면 `code=7404` 거부
 
 ### Nav2 관련 확정값
 
@@ -197,6 +228,18 @@ ros2 run nav2_map_server map_saver_cli -f ~/g1_real/maps/lab_2d
 
 **브리지 터미널 `Ctrl+C` 가 비상 정지다.**
 
+### 4단계 — 자세 인식 → 팔 동작
+
+```bash
+# 터미널 1  Jetson  → ssh unitree@192.168.123.164 ; python3 g1_cam_server.py
+# 터미널 2  g1      → python3 g1_stand_test.py --iface $G1_IFACE
+# 터미널 3  g1      → python3 ~/g1_real/g1_pose_action.py --dry-run   # 인식만
+#                    python3 ~/g1_real/g1_pose_action.py --iface $G1_IFACE
+```
+
+영상 확인: 브라우저에서 `http://192.168.123.164:8080`
+자세한 내용은 `POSE_GUIDE.md`.
+
 **종료는 `Ctrl+C`.** `Ctrl+Z` 는 프로세스를 백그라운드에 남겨 포트를 점유하므로
 다음 실행이 조용히 실패한다.
 
@@ -215,7 +258,7 @@ ros2 run nav2_map_server map_saver_cli -f ~/g1_real/maps/lab_2d
 5. **카메라** — Jetson USB 에 안 잡히는 원인 파악(케이블/미장착).
    최악의 경우 USB 웹캠을 로봇에 장착하고 **PC 에 직접 연결**하면
    Jetson 배포판 문제를 통째로 우회할 수 있다
-6. 사람 인식 → 반응 모션 통합
+6. 왼손 "흔들기" 판별 정교화 (현재는 "든 상태"로 단순화)
 
 ---
 
@@ -230,8 +273,7 @@ ros2 run nav2_map_server map_saver_cli -f ~/g1_real/maps/lab_2d
   ID 가 없다 — 호출 방법 미확인
 - 기립 완료 시 관측 FSM 값이 조회마다 흔들린 적이 있다(통신 품질).
   유선 전환 후 개선됨
-- **Jetson USB 에 카메라가 안 잡힌다.** `lsusb` 에 Realtek 허브 2개와
-  블루투스(`0bda:a85b`)뿐이고 Intel 장치가 없다. `/dev/video*` 도 없다.
-  로봇에 모듈은 보이는데 케이블이 다른 곳에 연결됐거나 미연결로 추정
+- Jetson 카메라는 **케이블이 안 꽂혀 있던 것**이었다. USB 3.0 포트(Bus 002)에
+  꽂아야 한다 — 2.0 에 꽂으면 대역폭이 부족하다
 - Nav2 주행 시 위치가 튀는 현상. 지도/주행의 스캔 높이 구간이 달랐던 것이
   한 원인 — 양쪽 `min_height`/`max_height` 를 맞출 것

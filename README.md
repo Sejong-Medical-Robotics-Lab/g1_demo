@@ -16,6 +16,8 @@
 | `g1_real_monitor.py` | 전체 | 기존 모니터 (precheck / baseline / watch) |
 | `g1_fsm_probe.py` | 1 | FSM 번호를 하나씩 보내 전이 사슬을 실측 |
 | `g1_arm_probe.py` | 1·2 | 팔 액션 진단 · 순회(`--tour`) |
+| `g1_cam_server.py` | 4 | **Jetson 에 두고 실행** — RealSense → MJPEG 스트리밍 |
+| `g1_pose_action.py` | 4 | **PC** — MediaPipe 자세 인식 → G1 팔 동작 |
 | `g1_mapping_2d.launch.py` | Nav2 | **2D 지도 작성** (slam_toolbox + 루프 클로저) |
 | `g1_nav2_localize.launch.py` | Nav2 | **자율주행** (고정 지도 + AMCL) |
 | `nav2_g1_localize.yaml` | Nav2 | Nav2 + AMCL 파라미터 |
@@ -24,7 +26,7 @@
 | `g1_nav2.launch.py` | — | (구) 지도 없이 주행 — 참고용 |
 
 문서: [PROGRESS.md](PROGRESS.md) 진행 상황·확정값 · [NAV2_GUIDE.md](NAV2_GUIDE.md) Nav2 실행 순서 ·
-[CAMERA_SETUP.md](CAMERA_SETUP.md) 카메라 연결 기록 ·
+[POSE_GUIDE.md](POSE_GUIDE.md) 자세 인식 실행 순서 · [CAMERA_SETUP.md](CAMERA_SETUP.md) 카메라 연결 기록 ·
 [SETUP.md](SETUP.md) 환경 구축 · [SDK_API.md](SDK_API.md) SDK 레퍼런스 ·
 [OVERVIEW.md](OVERVIEW.md) 전체 개념과 흐름
 
@@ -209,6 +211,33 @@ ROS 2 Jazzy 는 cyclonedds 0.10.4, Unitree SDK 는 0.10.2 를 쓴다. ROS 를 so
 ```bash
 echo "[$ROS_DISTRO]"    # 제어 터미널에서는 [] 여야 한다
 ```
+
+## 4단계 — 사람 자세 인식 → G1 대응 동작
+
+**ROS 를 쓰지 않는다.** Jetson(Foxy)과 PC(Jazzy)는 DDS 규약이 달라 같은
+도메인에 두면 노드가 죽는다. 영상만 HTTP 로 넘기고 인식은 PC 가 한다.
+
+```
+[Jetson] 카메라 → MJPEG (8080)  →  [PC] MediaPipe → 판별 → SDK → G1 팔
+```
+
+```bash
+# Jetson
+python3 g1_cam_server.py                    # 영상 확인: http://192.168.123.164:8080
+
+# PC (로봇을 FSM 501 로 올린 뒤)
+pip install "mediapipe==0.10.14"            # ★ 최신 1.0.x 에는 mp.solutions 가 없다
+python3 ~/g1_real/g1_pose_action.py --dry-run          # 인식만
+python3 ~/g1_real/g1_pose_action.py --iface $G1_IFACE  # 실전
+```
+
+| 사람 | G1 |
+|---|---|
+| 오른손 올림 | 오른손 올리기 (23) |
+| 왼손 올림 | 손 흔들기 (26) |
+| 양손 올림 | 양팔 올리기 (15) |
+
+자세한 순서는 [POSE_GUIDE.md](POSE_GUIDE.md).
 
 ## Nav2 자율주행
 

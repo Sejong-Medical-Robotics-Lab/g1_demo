@@ -224,65 +224,109 @@ rs-enumerate-devices
 
 ---
 
-## 4. 다음 단계 (예정)
+## 4. ROS 로는 안 됐다 — 그리고 우회
 
-### realsense-ros — ROS 2 래퍼
+### 벽 ③ — Foxy 와 Jazzy 는 서로 대화하지 못한다
 
-```bash
-mkdir -p ~/ws_rs/src && cd ~/ws_rs/src
-git clone https://github.com/IntelRealSense/realsense-ros.git -b ros2-legacy
-cd ~/ws_rs
-source /opt/ros/foxy/setup.bash
-colcon build --symlink-install
+realsense-ros 를 빌드하고(`ros2-legacy` 브랜치, Foxy 용) 노드를 띄웠다.
+
+```
+[camera.camera]: RealSense Node Is Up!
 ```
 
-`ros2-legacy` 브랜치가 Foxy 용이다. 최신 브랜치는 Humble 이상을 요구한다.
-
-### 실행
+PC(Jazzy)에서 토픽 이름도 보였다.
 
 ```bash
-source ~/ws_rs/install/setup.bash
-export ROS_DOMAIN_ID=33
-export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
-
-ros2 launch realsense2_camera rs_launch.py \
-    rgb_camera.profile:=640x480x15 \
-    enable_depth:=false
+ros2 topic list | grep camera
+# /camera/color/image_raw    ← 보인다!
 ```
 
-**RGB 만, 낮은 해상도로 시작한다.** 깊이까지 켜면 대역폭이 두 배가 된다.
-되는 것을 확인하고 나서 올린다.
+그런데 데이터가 안 왔고, Jetson 쪽 노드가 **죽었다.**
 
-### ★ 남은 최대 관문 — Foxy ↔ Jazzy
-
-| | OS | ROS |
-|---|---|---|
-| Jetson | Ubuntu 20.04 | **Foxy** |
-| 내 PC | Ubuntu 24.04 | **Jazzy** |
-
-**배포판이 다른 두 대 사이에 토픽이 오갈지는 아직 검증되지 않았다.**
-
-`sensor_msgs/Image` 같은 표준 메시지는 정의가 안정적이라 보통 통하지만,
-DDS 구현(RMW)이 다르면 서로를 못 본다.
-
-- Foxy 기본 = FastDDS
-- Jazzy 기본 = CycloneDDS
-
-→ **양쪽을 FastDDS 로 맞춰본다.**
-
-```bash
-export ROS_DOMAIN_ID=33                      # 양쪽 동일
-export RMW_IMPLEMENTATION=rmw_fastrtps_cpp   # 양쪽 동일
+```
+[SUBSCRIBER Error] Deserialization of data failed -> deserialize_change
+terminate called after throwing an instance of 'std::bad_alloc'
+process has died
 ```
 
-안 보이면 확인 순서:
+**Foxy 는 2020년, Jazzy 는 2024년.** 그 사이 DDS 탐색·직렬화 규약이 바뀌어
+서로의 데이터를 풀지 못한다. 토픽 **이름**은 오갔지만 **내용**은 못 주고받는다.
+`ROS_DOMAIN_ID` 와 `RMW_IMPLEMENTATION` 을 양쪽에서 맞춰도 소용없었다.
 
-```bash
-echo $ROS_DOMAIN_ID $RMW_IMPLEMENTATION   # 양쪽에서 같은가
-ros2 multicast send                        # Jetson
-ros2 multicast receive                     # PC — 메시지가 오는가
-sudo tcpdump -i <인터페이스> -n host 192.168.123.164 -c 20
+> **"보인다"와 "된다"는 다르다**
+> 토픽 목록에 이름이 뜨는 것은 발견(discovery)이 됐다는 뜻일 뿐이다.
+> 실제로 데이터가 흐르는지는 `ros2 topic hz` 로 따로 확인해야 한다.
+> 이 프로젝트에서 반복해 나온 패턴이다 — LiDAR 도, slam_toolbox 도
+> "떠 있는데 아무 일도 안 일어나는" 상태였다.
+
+### 벽 ④ — MediaPipe 는 Jetson 에 설치하기 어렵다
+
+"그러면 Jetson 에서 인식까지 하고 결과만 보내자"가 다음 생각이었다.
+그런데 **MediaPipe 공식 wheel 은 x86_64 와 라즈베리파이용 aarch64 뿐**이다.
+Jetson 용은 커뮤니티 빌드(버전이 0.8.x 대로 오래됨)를 쓰거나 Bazel 로
+직접 빌드해야 한다. librealsense 보다 훨씬 큰 작업이다.
+
+**PC(x86_64)에서는 `pip install mediapipe` 한 줄로 끝난다.**
+
+### 결론 — ROS 를 아예 빼고 HTTP 로
+
 ```
+[Jetson]  카메라 → JPEG 압축 → MJPEG (HTTP 8080)
+              ↓
+[PC]      영상 받기 → MediaPipe Pose → 행동 판별 → SDK → G1 팔 동작
+```
+
+**두 벽을 한 번에 넘는다.**
+
+- ROS 를 안 쓰니 배포판 차이가 무의미하다
+- 무거운 인식은 PC 가 한다. Jetson 은 영상만 흘려보낸다
+- 브라우저로도 열려서 **영상 확인이 쉽다** (발표 화면으로도 쓸 수 있다)
+- 팀원이 노트북 웹캠으로 만든 코드를 **입력만 바꿔** 그대로 쓴다
+
+```python
+cv2.VideoCapture(0)                                     # 개발: 웹캠
+cv2.VideoCapture("http://192.168.123.164:8080/stream")  # 실전: 로봇
+```
+
+> **MJPEG 이란**
+> JPEG 이미지를 경계 문자열로 구분해 HTTP 응답 하나에 계속 이어 붙이는
+> 방식이다(`multipart/x-mixed-replace`). 압축 효율은 동영상 코덱보다
+> 나쁘지만 **구현이 단순하고 프레임 단위로 독립적**이라 중간에 끊겨도
+> 다음 프레임부터 바로 복구된다. 지연도 적다.
+
+### 지연을 줄인 세 가지
+
+| 방법 | 효과 |
+|---|---|
+| **최신 프레임만 유지** | 밀린 프레임을 버린다. 체감 지연에 가장 효과가 크다 |
+| 640x480, JPEG 품질 70 | 압축·전송 시간 단축 |
+| `CAP_PROP_BUFFERSIZE 1` | 드라이버 버퍼도 최소화 |
+
+전체 지연은 약 0.1초. 자세를 **유지**하면 반응하는 방식이고 G1 팔 동작
+자체가 3~8초 걸리므로 문제가 되지 않는다.
+
+### RealSense 와 /dev/video*
+
+RealSense 는 UVC 장치라 `/dev/video0`, `video1`, ... 을 여러 개 만든다.
+**그중 하나만 컬러이고 나머지는 깊이·적외선·메타데이터다.** 번호는 기기와
+연결 순서에 따라 달라진다.
+
+`g1_cam_server.py` 는 후보를 차례로 열어 **3채널이면서 채널별 평균값이
+서로 다른**(= 흑백이 아닌) 장치를 컬러로 판정해 자동으로 고른다.
+잘못 고르면 `--device N` 으로 지정한다.
+
+### MediaPipe 버전 함정
+
+`pip install mediapipe` 로 받은 **1.0.1 에는 `mp.solutions` 가 없다.**
+
+```
+AttributeError: module 'mediapipe' has no attribute 'solutions'
+```
+
+최신 MediaPipe 는 Tasks API 로 옮겨가면서 예전 `solutions` 방식을 뺐다.
+Tasks API 는 모델 파일(`pose_landmarker.task`)을 따로 받아야 해서 번거롭다.
+
+→ **`pip install "mediapipe==0.10.14"`** 로 내려서 해결.
 
 ---
 
@@ -308,5 +352,11 @@ PC 라우팅을 고쳐 인터넷을 공유하는 방법도 있었지만, 그러�
 **기존에 동작하는 것을 하나도 건드리지 않는다.**
 
 **⑤ 버전을 기록한다.**
-`librealsense v2.55.1`, `realsense-ros ros2-legacy`.
+`librealsense v2.55.1`, `realsense-ros ros2-legacy`, `mediapipe 0.10.14`.
 "어떻게든 됐다"로 끝내면 다음에 재현할 수 없다.
+특히 **`pip install <패키지>` 로 최신을 받으면 API 가 바뀌어 있을 수 있다.**
+
+**⑥ 막혔을 때 우회로를 본다.**
+Foxy↔Jazzy 를 억지로 통하게 만들려 했다면 아직도 붙잡고 있었을 것이다.
+"영상만 넘기면 된다"로 문제를 다시 정의하니 HTTP 한 줄로 풀렸다.
+**도구가 안 맞으면 도구를 바꾸는 게 아니라 요구를 다시 본다.**
