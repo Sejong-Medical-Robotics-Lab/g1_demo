@@ -1,0 +1,128 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+    Property Tree Widget:
+      Expanded:
+        - /Map1
+        - /LaserScan1
+      Splitter Ratio: 0.5
+    Tree Height: 600
+  - Class: rviz_common/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Cell Size: 1
+      Plane Cell Count: 20
+      Color: 80; 80; 80
+      Alpha: 0.3
+      Reference Frame: <Fixed Frame>
+
+    # ── 2D 점유격자 지도 — slam_toolbox 가 실시간으로 채운다 ─────────
+    - Class: rviz_default_plugins/Map
+      Name: Map
+      Enabled: true
+      Topic:
+        Value: /map
+        Depth: 1
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+      Alpha: 0.7
+      Color Scheme: map
+      Draw Behind: true
+      Update Topic:
+        Value: /map_updates
+
+    # ── 현재 스캔 — 지도의 벽선과 겹쳐야 정상이다 ────────────────────
+    - Class: rviz_default_plugins/LaserScan
+      Name: LaserScan
+      Enabled: true
+      Topic:
+        Value: /scan
+        Depth: 5
+        Durability Policy: Volatile
+        Reliability Policy: Best Effort
+      Style: Points
+      Size (Pixels): 3
+      Color: 255; 40; 40
+      Color Transformer: FlatColor
+      Decay Time: 0
+      Position Transformer: XYZ
+
+    # ── FAST-LIO 3D 지도 — 발표 화면용. 필요 없으면 체크 해제 ────────
+    - Class: rviz_default_plugins/PointCloud2
+      Name: CloudMap3D
+      Enabled: false
+      Topic:
+        Value: /Laser_map
+        Depth: 1
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+      Style: Flat Squares
+      Size (m): 0.02
+      Alpha: 1
+      Color: 200; 200; 200
+      Color Transformer: FlatColor
+      Decay Time: 0
+      Position Transformer: XYZ
+
+    - Class: rviz_default_plugins/Odometry
+      Name: Odometry
+      Enabled: true
+      Topic:
+        Value: /Odometry
+        Depth: 5
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+      Keep: 1
+      Shape:
+        Value: Arrow
+        Alpha: 1
+        Color: 255; 200; 0
+        Shaft Length: 0.5
+        Shaft Radius: 0.05
+        Head Length: 0.2
+        Head Radius: 0.1
+      Covariance:
+        Value: false
+
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: false
+      Show Names: true
+      Show Axes: true
+      Show Arrows: false
+      Marker Scale: 0.5
+
+  Global Options:
+    Background Color: 48; 48; 48
+    Fixed Frame: map
+    Frame Rate: 30
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/FocusCamera
+    - Class: rviz_default_plugins/Measure
+      Line color: 128; 128; 0
+  Value: true
+  Views:
+    Current:
+      # 위에서 내려다보는 뷰. 지도 만들 때는 이 시점이 제일 보기 좋다.
+      Class: rviz_default_plugins/TopDownOrtho
+      Name: Current View
+      Angle: 0
+      Scale: 30
+      Target Frame: <Fixed Frame>
+      X: 0
+      Y: 0
+    Saved: ~
+Window Geometry:
+  Displays:
+    collapsed: false
+  Height: 900
+  Width: 1400
+  Views:
+    collapsed: false

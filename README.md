@@ -16,9 +16,16 @@
 | `g1_real_monitor.py` | 전체 | 기존 모니터 (precheck / baseline / watch) |
 | `g1_fsm_probe.py` | 1 | FSM 번호를 하나씩 보내 전이 사슬을 실측 |
 | `g1_arm_probe.py` | 1·2 | 팔 액션 진단 · 순회(`--tour`) |
-| `g1_slam.launch.py` | 4 | 2D SLAM(slam_toolbox) — 3D 로 갔으므로 참고용 |
+| `g1_mapping_2d.launch.py` | Nav2 | **2D 지도 작성** (slam_toolbox + 루프 클로저) |
+| `g1_nav2_localize.launch.py` | Nav2 | **자율주행** (고정 지도 + AMCL) |
+| `nav2_g1_localize.yaml` | Nav2 | Nav2 + AMCL 파라미터 |
+| `g1_mapping.rviz` | Nav2 | 지도 작성용 RViz 설정 |
+| `g1_slam.launch.py` | — | (구) 오도메트리 없는 2D SLAM — 참고용 |
+| `g1_nav2.launch.py` | — | (구) 지도 없이 주행 — 참고용 |
 
-문서: [PROGRESS.md](PROGRESS.md) 진행 상황·확정값 · [SETUP.md](SETUP.md) 환경 구축 · [SDK_API.md](SDK_API.md) SDK 레퍼런스
+문서: [PROGRESS.md](PROGRESS.md) 진행 상황·확정값 · [NAV2_GUIDE.md](NAV2_GUIDE.md) Nav2 실행 순서 ·
+[SETUP.md](SETUP.md) 환경 구축 · [SDK_API.md](SDK_API.md) SDK 레퍼런스 ·
+[OVERVIEW.md](OVERVIEW.md) 전체 개념과 흐름
 
 ## 터미널 구성
 
@@ -201,6 +208,30 @@ ROS 2 Jazzy 는 cyclonedds 0.10.4, Unitree SDK 는 0.10.2 를 쓴다. ROS 를 so
 ```bash
 echo "[$ROS_DISTRO]"    # 제어 터미널에서는 [] 여야 한다
 ```
+
+## Nav2 자율주행
+
+주행 중에 지도까지 만들면 보행 진동으로 위치가 흔들려 로봇이 엉뚱한 곳으로
+간다. **지도 작성과 주행을 분리**한다.
+
+```
+1단계) slam_toolbox 로 2D 지도 작성 → 저장   (루프 클로저로 오차 보정)
+2단계) 그 지도를 고정하고 AMCL 로 위치 추정   (오차 누적 없음)
+```
+
+```bash
+# 지도 작성
+ros2 launch /home/hong/g1_real/g1_mapping_2d.launch.py
+ros2 run nav2_map_server map_saver_cli -f ~/g1_real/maps/lab_2d
+
+# 자율주행 (브리지를 먼저 띄운 뒤)
+ros2 launch /home/hong/g1_real/g1_nav2_localize.launch.py
+```
+
+**RViz 에서 `2D Pose Estimate` 로 초기 위치를 반드시 찍는다.**
+**브리지 터미널 `Ctrl+C` 가 비상 정지다.**
+
+자세한 순서는 [NAV2_GUIDE.md](NAV2_GUIDE.md).
 
 ## 3D SLAM — FAST-LIO
 

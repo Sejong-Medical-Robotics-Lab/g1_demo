@@ -1,6 +1,6 @@
 # PROGRESS — 진행 상황
 
-마지막 갱신: 2026-08-20
+마지막 갱신: 2026-08-22
 
 ## 단계별 현황
 
@@ -11,14 +11,55 @@
 | 3 | 보행 + 상체 동작 혼합 | ❌ 미착수 |
 | 4 | 센서 시각화 (LiDAR → RViz2) | ✅ 완료 |
 | 확장 | 3D SLAM (FAST-LIO) | ✅ 동작 확인, 맵 저장까지 |
-| 확장 | 깊이 카메라 (RealSense) | ❌ 미착수 |
-| 확장 | Nav2 자율주행 | ❌ 미착수 |
+| 확장 | `/cmd_vel` 브리지 | ✅ 로봇이 ROS 명령으로 걷는 것 확인 |
+| 확장 | 2D SLAM (slam_toolbox) | ✅ 지도 생성 확인 |
+| 확장 | **Nav2 자율주행** | 진행 중 — 위치 추정 안정화가 관건 |
+| 확장 | 깊이 카메라 (RealSense) | 보류 — **Jetson USB 에 카메라 미인식** |
 
 원래 목표였던 4단계를 넘어 SLAM 까지 왔지만, **2단계 보행이 비어 있다.**
 SLAM 데모에서 로봇이 실제로 걸으려면 이것이 선행되어야 하고,
 보행 진동으로 맵 품질이 달라지므로 SLAM 튜닝도 그 뒤에 하는 것이 순서다.
 
 ---
+
+## Nav2 구조 — 2단계 방식
+
+주행 중에 지도까지 만드는 방식(SLAM + Nav2 동시)은 휴머노이드에서 불안정했다.
+보행 진동으로 지도와 위치가 동시에 흔들려 로봇이 엉뚱한 방향으로 갔다.
+
+그래서 **지도 작성과 주행을 분리**한다.
+
+```
+1단계) slam_toolbox 로 2D 지도를 만들어 저장       (루프 클로저 O)
+2단계) 그 지도를 고정하고 AMCL 이 위치만 찾는다     (오차 누적 X)
+```
+
+역할 분담:
+
+| | 역할 |
+|---|---|
+| FAST-LIO | 오도메트리 (단기 정확, 장기 드리프트) |
+| slam_toolbox | 지도 작성 + **루프 클로저**로 드리프트 보정 |
+| AMCL | 주행 시 고정 지도에 스캔을 맞춰 위치 확정 |
+| Nav2 | 경로 계획 → `/cmd_vel` |
+| `g1_cmdvel_bridge.py` | `/cmd_vel` → `SetVelocity()` → 로봇 |
+
+실행 순서는 `NAV2_GUIDE.md` 참고.
+
+### Nav2 관련 확정값
+
+- **`slam_toolbox` 는 라이프사이클 노드다.** 프로세스가 떠도 그것만으로는
+  동작하지 않는다 — `lifecycle_manager` 로 activate 해야 `/scan` 을 구독하고
+  `/map` 을 발행한다. **안 하면 에러 없이 아무 일도 안 일어난다.**
+- **`navigation_launch.py` 는 우리가 안 쓰는 노드까지 전부 띄운다.**
+  (`docking_server`, `route_server`, `waypoint_follower`, `collision_monitor`,
+  `smoother_server`) 하나라도 설정이 없으면 `lifecycle_manager` 가
+  "Failed to bring up all requested nodes" 로 **전체를 중단시킨다.**
+  `nav2_g1_localize.yaml` 에 더미 설정을 넣어 해결.
+- **rclpy 와 Unitree SDK 를 한 프로세스에서 쓰려면** `RMW_IMPLEMENTATION=rmw_fastrtps_cpp`.
+  ROS 2 가 CycloneDDS 대신 FastDDS 를 쓰게 해서 SDK 것과의 충돌을 피한다.
+- 브리지에도 데드맨을 넣었다. `/cmd_vel` 이 0.5초 이상 안 오면 자동 정지.
+  **브리지 터미널 `Ctrl+C` 가 소프트웨어 비상 정지다.**
 
 ## 확정값 — 문서에 없어 실측으로 알아낸 것들
 
@@ -84,7 +125,14 @@ alias g1='source ~/g1_real/g1_env.sh'
 alias lidar='source /opt/ros/jazzy/setup.bash && source ~/ws_livox/install/setup.sh && cd ~/ws_livox/src/livox_ros_driver2'
 alias slam='source /opt/ros/jazzy/setup.bash && source ~/ws_livox/install/setup.sh && source ~/ws_fastlio/install/setup.bash'
 alias savemap='ros2 service call /map_save std_srvs/srv/Trigger'
+alias g1ros='source ~/g1_real/g1_env.sh; export RMW_IMPLEMENTATION=rmw_fastrtps_cpp; source /opt/ros/jazzy/setup.bash'
 ```
+
+`g1ros` 는 브리지 전용이다 — venv 와 ROS 를 한 셸에 넣되 RMW 를 FastDDS 로
+바꿔 DDS 충돌을 피한다. **RMW export 가 빠지면 첫날처럼 크래시난다.**
+
+`slam` / `lidar` 에도 `export RMW_IMPLEMENTATION=rmw_fastrtps_cpp` 를
+넣어 두는 편이 좋다 — 토픽을 주고받는 모든 노드가 같은 RMW 여야 한다.
 
 **`g1` 과 `lidar` 를 같은 터미널에서 쓰지 않는다.**
 
@@ -123,6 +171,32 @@ savemap        # → ~/g1_real/maps/lab.pcd
 pcl_viewer ~/g1_real/maps/lab.pcd
 ```
 
+### 2D 지도 작성 (Nav2 용)
+
+```bash
+# 터미널 1  g1     → python3 g1_stand_test.py --iface $G1_IFACE
+# 터미널 2  lidar  → ros2 launch livox_ros_driver2 msg_MID360s_launch.py
+# 터미널 3  slam   → ros2 launch fast_lio mapping.launch.py config_file:=mid360s_mapping.yaml
+# 터미널 4  slam   → ros2 launch /home/hong/g1_real/g1_mapping_2d.launch.py
+# 터미널 5  조이스틱으로 조종 (회전은 원호로, 출발점 복귀)
+
+ros2 run nav2_map_server map_saver_cli -f ~/g1_real/maps/lab_2d
+```
+
+### Nav2 자율주행
+
+```bash
+# 터미널 1  g1     → python3 g1_stand_test.py --iface $G1_IFACE
+# 터미널 2  lidar  → ros2 launch livox_ros_driver2 msg_MID360s_launch.py
+# 터미널 3  slam   → ros2 launch fast_lio mapping.launch.py config_file:=mid360s.yaml
+# 터미널 4  g1ros  → python3 ~/g1_real/g1_cmdvel_bridge.py --iface $G1_IFACE
+# 터미널 5  slam   → ros2 launch /home/hong/g1_real/g1_nav2_localize.launch.py
+
+# RViz 에서 2D Pose Estimate 로 초기 위치 지정 → 2D Goal Pose 로 목표
+```
+
+**브리지 터미널 `Ctrl+C` 가 비상 정지다.**
+
 **종료는 `Ctrl+C`.** `Ctrl+Z` 는 프로세스를 백그라운드에 남겨 포트를 점유하므로
 다음 실행이 조용히 실패한다.
 
@@ -132,15 +206,16 @@ pcl_viewer ~/g1_real/maps/lab.pcd
 
 **우선순위 순.**
 
-1. **보행 검증 (2단계)** — `g1_walk_test.py --vx 0.2 --sec 3` 부터.
-   행어 · 진행 방향 공간 · 리모컨 대기 확인 후.
-2. **보행 + 상체 (3단계)** — 검증 후 `SEQUENCE` 에 `move`/`stop` 행 추가,
+1. **좋은 2D 지도 확보** — 회전을 원호로, 출발점 복귀로 루프 클로저 유도.
+   여러 번 시도해 제일 나은 것을 쓴다
+2. **Nav2 주행 검증** — 초기 위치 지정 후 2~3m 직선 목표부터
+3. **보행 + 상체 (3단계)** — `SEQUENCE` 에 `move`/`stop` 행 추가,
    `--enable-walk` 로 실행
-3. **걸으면서 SLAM** — 보행 진동 조건에서 맵 품질 재확인·재튜닝
 4. 팔 액션 22개 순회 확인 — `g1_arm_probe.py --tour`
-5. 깊이 카메라 — Jetson 에서 노드 실행 후 PC 에서 구독.
-   `ROS_DOMAIN_ID`(현재 33) 와 RMW 를 양쪽에서 맞춰야 함
-6. Nav2 — 별도 프로젝트 규모
+5. **카메라** — Jetson USB 에 안 잡히는 원인 파악(케이블/미장착).
+   최악의 경우 USB 웹캠을 로봇에 장착하고 **PC 에 직접 연결**하면
+   Jetson 배포판 문제를 통째로 우회할 수 있다
+6. 사람 인식 → 반응 모션 통합
 
 ---
 
@@ -155,3 +230,8 @@ pcl_viewer ~/g1_real/maps/lab.pcd
   ID 가 없다 — 호출 방법 미확인
 - 기립 완료 시 관측 FSM 값이 조회마다 흔들린 적이 있다(통신 품질).
   유선 전환 후 개선됨
+- **Jetson USB 에 카메라가 안 잡힌다.** `lsusb` 에 Realtek 허브 2개와
+  블루투스(`0bda:a85b`)뿐이고 Intel 장치가 없다. `/dev/video*` 도 없다.
+  로봇에 모듈은 보이는데 케이블이 다른 곳에 연결됐거나 미연결로 추정
+- Nav2 주행 시 위치가 튀는 현상. 지도/주행의 스캔 높이 구간이 달랐던 것이
+  한 원인 — 양쪽 `min_height`/`max_height` 를 맞출 것

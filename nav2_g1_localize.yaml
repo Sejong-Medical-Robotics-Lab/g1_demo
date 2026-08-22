@@ -1,0 +1,421 @@
+# nav2_g1_localize.yaml — G1 + 사전 2D 지도 + AMCL 기반 Nav2 설정
+#
+# 구성:
+#   FAST-LIO → camera_init→body TF, /cloud_registered_body
+#       → pointcloud_to_laserscan → /scan
+#       → AMCL(위치 추정) + Nav2 costmap → /cmd_vel → g1_cmdvel_bridge → G1
+#
+# 프레임:
+#   map ──(AMCL 이 보정)──> camera_init ──(FAST-LIO)──> body ──> base_link
+#
+#   사전에 만든 고정 지도(maps/lab_2d.yaml)를 map_server 가 올리고,
+#   AMCL 이 그 지도와 /scan 을 대조해 map→camera_init 을 발행한다.
+#   FAST-LIO 는 오도메트리(단기 상대이동) 역할만 하고, 누적 드리프트는
+#   AMCL 이 계속 보정한다. 지도가 변하지 않으므로 오차가 쌓이지 않는다.
+#
+#   ※ map→camera_init 을 항등 static TF 로 두면 안 된다. AMCL 과 충돌한다.
+
+amcl:
+  ros__parameters:
+    use_sim_time: false
+
+    # ── 프레임 ───────────────────────────────────────────────────────
+    # AMCL 이 map → odom_frame_id 변환을 발행한다. 여기서 odom_frame_id 는
+    # FAST-LIO 의 원점 프레임(camera_init)이다. 즉 AMCL 이 FAST-LIO 의
+    # 누적 드리프트를 고정 지도에 맞춰 계속 보정한다.
+    base_frame_id: "base_link"
+    odom_frame_id: "camera_init"
+    global_frame_id: "map"
+    scan_topic: "scan"
+    # ★ 반드시 true 여야 한다.
+    #   false 로 두면 AMCL 이 map→camera_init 을 발행하지 않는다. 그러면
+    #   global_costmap 이 map 프레임을 15초간 기다리다 포기하고
+    #   "Failed to bring up all requested nodes" 로 bringup 전체가 중단된다.
+    #   RViz 를 띄워 2D Pose Estimate 를 손으로 찍는 것은 그 15초 안에 불가능하다.
+    #
+    #   FAST-LIO 의 시작 지점이 곧 지도 원점이므로, 로봇을 지도를 만들 때
+    #   출발했던 자리·방향에 세우고 시작하면 아래 값(0,0,yaw 0)이 정답이다.
+    #   자리가 어긋났으면 Nav2 가 뜬 뒤 RViz 의 2D Pose Estimate 로 보정한다.
+    #   (그 시점에는 이미 map 프레임이 있으므로 문제없다)
+    set_initial_pose: true
+    initial_pose:
+      x: 0.0
+      y: 0.0
+      z: 0.0
+      yaw: 0.0
+
+    # ── 오도메트리 모델 ──────────────────────────────────────────────
+    # 전진 + 제자리 회전만 쓰므로 차동구동으로 다룬다.
+    robot_model_type: "nav2_amcl::DifferentialMotionModel"
+    # 휴머노이드 보행은 미끄러짐과 흔들림이 크다. 오도메트리 노이즈를
+    # 넉넉히 잡아야 AMCL 이 스캔 정합 쪽을 더 신뢰한다.
+    alpha1: 0.4      # 회전 중 회전 오차
+    alpha2: 0.4      # 직진 중 회전 오차  ← 보행에서 특히 크다
+    alpha3: 0.4      # 직진 중 직진 오차
+    alpha4: 0.4      # 회전 중 직진 오차
+    alpha5: 0.2
+
+    # ── 입자 필터 ────────────────────────────────────────────────────
+    min_particles: 500
+    max_particles: 3000
+    update_min_d: 0.15             # 이만큼 움직이면 갱신 [m]
+    update_min_a: 0.15             # 이만큼 돌면 갱신 [rad]
+    resample_interval: 1
+    transform_tolerance: 0.5       # 보행 진동을 감안해 느슨하게
+    recovery_alpha_slow: 0.001     # 위치를 잃었을 때 회복을 돕는다
+    recovery_alpha_fast: 0.1
+
+    # ── 스캔 매칭 ────────────────────────────────────────────────────
+    laser_model_type: "likelihood_field"
+    laser_likelihood_max_dist: 2.0
+    laser_max_range: 15.0
+    laser_min_range: 0.6
+    max_beams: 120
+    z_hit: 0.6
+    z_rand: 0.4                    # 사람 등 지도에 없는 물체를 감안해 높인다
+    z_max: 0.05
+    z_short: 0.05
+    sigma_hit: 0.2
+    lambda_short: 0.1
+    pf_err: 0.05
+    pf_z: 0.99
+    do_beamskip: false
+    tf_broadcast: true
+
+map_server:
+  ros__parameters:
+    use_sim_time: false
+    # ★ 절대경로로 직접 지정한다.
+    #   Jazzy 의 nav2_bringup/localization_launch.py 는 map:= 인자를
+    #   map_server 의 yaml_filename 으로 치환해주지 않는다. 빈 문자열이면
+    #   map_server 가 에러 없이 configure/activate 를 통과한 뒤 아무것도
+    #   발행하지 않고, AMCL 이 "Waiting for map...." 에서 멈춘다.
+    #   → 그 결과 map 프레임이 안 생겨 global_costmap 이 activate 를 못 끝내고
+    #      lifecycle_manager 가 "Failed to bring up all requested nodes" 로 중단.
+    #   지도를 바꿀 때는 launch 의 map:= 가 아니라 이 줄을 고친다.
+    yaml_filename: "/home/hong/g1_real/maps/lab_2d.yaml"
+
+map_saver:
+  ros__parameters:
+    use_sim_time: false
+    save_map_timeout: 5.0
+    free_thresh_default: 0.25
+    occupied_thresh_default: 0.65
+
+bt_navigator:
+  ros__parameters:
+    use_sim_time: false
+    global_frame: map
+    robot_base_frame: base_link
+    odom_topic: /Odometry           # FAST-LIO 가 내는 오도메트리
+    bt_loop_duration: 10
+    default_server_timeout: 20
+
+controller_server:
+  ros__parameters:
+    use_sim_time: false
+    controller_frequency: 5.0       # 보행 로봇이라 낮게. 20Hz 는 과하다
+    min_x_velocity_threshold: 0.02
+    min_y_velocity_threshold: 0.02
+    min_theta_velocity_threshold: 0.05
+    failure_tolerance: 0.5
+    progress_checker_plugin: "progress_checker"
+    goal_checker_plugins: ["general_goal_checker"]
+    controller_plugins: ["FollowPath"]
+
+    progress_checker:
+      plugin: "nav2_controller::SimpleProgressChecker"
+      required_movement_radius: 0.3
+      movement_time_allowance: 20.0   # 휴머노이드는 느리다. 넉넉히
+
+    general_goal_checker:
+      plugin: "nav2_controller::SimpleGoalChecker"
+      xy_goal_tolerance: 0.35         # 보행 정밀도를 감안해 느슨하게
+      yaw_goal_tolerance: 0.4
+      stateful: true
+
+    # DWB — 차동구동처럼 다룬다(전진 + 제자리 회전).
+    # G1 은 vy(횡이동)도 되지만 전진보다 불안정하므로 쓰지 않는다.
+    FollowPath:
+      plugin: "dwb_core::DWBLocalPlanner"
+      debug_trajectory_details: true
+
+      # ★ 속도 상한 — g1_cmdvel_bridge 의 clamp 와 맞춰 둔다
+      min_vel_x: 0.0
+      max_vel_x: 0.25
+      min_vel_y: 0.0
+      max_vel_y: 0.0                  # 횡이동 사용 안 함
+      # ★ 회전이 SLAM 을 가장 크게 흔든다. 휴머노이드 제자리 회전은
+      #   진동이 커서 FAST-LIO 의 위치 추정이 어긋난다.
+      max_vel_theta: 0.15
+      min_speed_xy: 0.0
+      max_speed_xy: 0.25
+      min_speed_theta: 0.0
+
+      acc_lim_x: 0.5
+      acc_lim_y: 0.0
+      acc_lim_theta: 0.5
+      decel_lim_x: -0.5
+      decel_lim_y: 0.0
+      decel_lim_theta: -0.5
+
+      vx_samples: 10
+      vy_samples: 1
+      vtheta_samples: 20
+      sim_time: 2.0
+      linear_granularity: 0.05
+      angular_granularity: 0.025
+      transform_tolerance: 0.5        # 보행 진동을 감안해 느슨하게
+      xy_goal_tolerance: 0.35
+      trans_stopped_velocity: 0.05
+      short_circuit_trajectory_evaluation: true
+      stateful: true
+
+      critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign",
+                "PathAlign", "PathDist", "GoalDist"]
+      BaseObstacle.scale: 0.02
+      PathAlign.scale: 16.0
+      PathAlign.forward_point_distance: 0.1
+      GoalAlign.scale: 12.0
+      GoalAlign.forward_point_distance: 0.1
+      PathDist.scale: 32.0
+      GoalDist.scale: 24.0
+      # 제자리 회전 비중을 낮춘다. 값이 크면 목표 방향으로 먼저 홱 돌려 하는데,
+      # 그 회전이 위치 추정을 가장 크게 흔든다.
+      RotateToGoal.scale: 8.0
+      RotateToGoal.slowing_factor: 10.0
+      RotateToGoal.lookahead_time: -1.0
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      use_sim_time: false
+      update_frequency: 5.0
+      publish_frequency: 2.0
+      global_frame: camera_init       # 오도메트리 프레임
+      robot_base_frame: base_link
+      rolling_window: true
+      width: 6
+      height: 6
+      resolution: 0.05
+      robot_radius: 0.40              # G1 을 넉넉히 감싸는 원. 팔 폭 고려
+      plugins: ["obstacle_layer", "inflation_layer"]
+
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: true
+        observation_sources: scan
+        scan:
+          topic: /scan
+          max_obstacle_height: 2.0
+          clearing: true
+          marking: true
+          data_type: "LaserScan"
+          raytrace_max_range: 8.0
+          raytrace_min_range: 0.0
+          obstacle_max_range: 6.0
+          obstacle_min_range: 0.0
+
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.6
+
+      always_send_full_costmap: true
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      use_sim_time: false
+      update_frequency: 1.0
+      publish_frequency: 1.0
+      global_frame: map
+      robot_base_frame: base_link
+      robot_radius: 0.40
+      resolution: 0.05
+      # ★ 사전 지도를 쓰므로 롤링 윈도우가 아니다. 지도 전체를 놓고
+      #   경로를 계획한다 — 벽 뒤로 돌아가는 경로도 찾을 수 있다.
+      rolling_window: false
+      track_unknown_space: true
+      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: true
+        enabled: true
+
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: true
+        observation_sources: scan
+        scan:
+          topic: /scan
+          max_obstacle_height: 2.0
+          clearing: true
+          marking: true
+          data_type: "LaserScan"
+          raytrace_max_range: 12.0
+          raytrace_min_range: 0.0
+          obstacle_max_range: 10.0
+          obstacle_min_range: 0.0
+
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.6
+
+      always_send_full_costmap: true
+
+planner_server:
+  ros__parameters:
+    use_sim_time: false
+    expected_planner_frequency: 1.0
+    planner_plugins: ["GridBased"]
+    GridBased:
+      plugin: "nav2_navfn_planner::NavfnPlanner"
+      tolerance: 0.5
+      use_astar: false
+      allow_unknown: true
+
+behavior_server:
+  ros__parameters:
+    use_sim_time: false
+    local_costmap_topic: local_costmap/costmap_raw
+    global_costmap_topic: global_costmap/costmap_raw
+    local_frame: camera_init
+    global_frame: map
+    robot_base_frame: base_link
+    transform_tolerance: 0.5
+    behavior_plugins: ["spin", "backup", "wait"]
+    spin:
+      plugin: "nav2_behaviors::Spin"
+    backup:
+      plugin: "nav2_behaviors::BackUp"
+    wait:
+      plugin: "nav2_behaviors::Wait"
+    # ★ 후진은 휴머노이드에 불리하다. 복구 동작 속도를 낮춰 둔다
+    simulate_ahead_time: 2.0
+    max_rotational_vel: 0.15
+    min_rotational_vel: 0.1
+    rotational_acc_lim: 1.0
+
+velocity_smoother:
+  ros__parameters:
+    use_sim_time: false
+    smoothing_frequency: 5.0
+    scale_velocities: false
+    feedback: "OPEN_LOOP"
+    max_velocity: [0.25, 0.0, 0.15]
+    min_velocity: [-0.15, 0.0, -0.15]
+    max_accel: [0.3, 0.0, 0.5]
+    max_decel: [-0.3, 0.0, -0.5]
+    odom_topic: "/Odometry"
+    odom_duration: 0.1
+    deadband_velocity: [0.0, 0.0, 0.0]
+    velocity_timeout: 1.0
+
+# ─────────────────────────────────────────────────────────────────────
+# 아래는 우리가 직접 쓰지는 않지만 nav2_bringup 의 navigation_launch.py 가
+# 무조건 띄우는 노드들이다. 설정이 없으면 lifecycle_manager 가
+# "Failed to bring up all requested nodes" 로 전체를 중단시킨다.
+# ─────────────────────────────────────────────────────────────────────
+
+smoother_server:
+  ros__parameters:
+    use_sim_time: false
+    smoother_plugins: ["simple_smoother"]
+    simple_smoother:
+      plugin: "nav2_smoother::SimpleSmoother"
+      tolerance: 1.0e-10
+      max_its: 1000
+      do_refinement: true
+
+waypoint_follower:
+  ros__parameters:
+    use_sim_time: false
+    loop_rate: 20
+    stop_on_failure: false
+    action_server_result_timeout: 900.0
+    waypoint_task_executor_plugin: "wait_at_waypoint"
+    wait_at_waypoint:
+      plugin: "nav2_waypoint_follower::WaitAtWaypoint"
+      enabled: true
+      waypoint_pause_duration: 200
+
+collision_monitor:
+  ros__parameters:
+    use_sim_time: false
+    base_frame_id: "base_link"
+    odom_frame_id: "camera_init"
+    cmd_vel_in_topic: "cmd_vel_smoothed"
+    cmd_vel_out_topic: "cmd_vel"
+    state_topic: "collision_monitor_state"
+    transform_tolerance: 0.5
+    source_timeout: 1.0
+    base_shift_correction: true
+    stop_pub_timeout: 2.0
+    polygons: ["PolygonStop"]
+    PolygonStop:
+      type: "circle"
+      # ★ 반경을 줄이고 판정 점수를 올렸다.
+      #   /scan 이 로봇 자기 몸(어깨·팔)을 잡으면 출발하자마자 계속 멈춘다.
+      #   launch 의 range_min 을 0.6 으로 올린 것과 같은 취지.
+      radius: 0.30
+      action_type: "stop"
+      min_points: 10
+      visualize: true
+      polygon_pub_topic: "polygon_stop"
+      enabled: true
+    observation_sources: ["scan"]
+    scan:
+      type: "scan"
+      topic: "/scan"
+      enabled: true
+
+docking_server:
+  ros__parameters:
+    use_sim_time: false
+    controller_frequency: 10.0
+    initial_perception_timeout: 5.0
+    wait_charge_timeout: 5.0
+    dock_approach_timeout: 30.0
+    undock_linear_tolerance: 0.05
+    undock_angular_tolerance: 0.05
+    max_retries: 3
+    base_frame: "base_link"
+    fixed_frame: "camera_init"
+    dock_backwards: false
+    dock_prestaging_tolerance: 0.5
+    # 도킹은 쓰지 않는다. 노드가 뜨기만 하도록 더미를 채워둔 것.
+    dock_plugins: ["dummy_dock"]
+    dummy_dock:
+      plugin: "opennav_docking::SimpleChargingDock"
+      docking_threshold: 0.05
+      staging_x_offset: -0.7
+      staging_yaw_offset: 0.0
+      use_battery_status: false
+      use_external_detection_pose: false
+      use_stall_detection: false
+      external_detection_timeout: 1.0
+      external_detection_translation_x: -0.18
+      external_detection_translation_y: 0.0
+      external_detection_rotation_roll: -1.57
+      external_detection_rotation_pitch: -1.57
+      external_detection_rotation_yaw: 0.0
+      filter_coef: 0.1
+      charging_threshold: 0.5
+      stall_velocity_threshold: 1.0
+      stall_effort_threshold: 1.0
+    docks: ["dummy"]
+    dummy:
+      type: "dummy_dock"
+      frame: "map"
+      pose: [0.0, 0.0, 0.0]
+    controller:
+      k_phi: 3.0
+      k_delta: 2.0
+      beta: 0.4
+      lambda: 2.0
+      v_linear_min: 0.1
+      v_linear_max: 0.25
+      v_angular_max: 0.20
