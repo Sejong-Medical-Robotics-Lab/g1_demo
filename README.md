@@ -24,6 +24,7 @@
 | `g1_nav2.launch.py` | — | (구) 지도 없이 주행 — 참고용 |
 
 문서: [PROGRESS.md](PROGRESS.md) 진행 상황·확정값 · [NAV2_GUIDE.md](NAV2_GUIDE.md) Nav2 실행 순서 ·
+[CAMERA_SETUP.md](CAMERA_SETUP.md) 카메라 연결 기록 ·
 [SETUP.md](SETUP.md) 환경 구축 · [SDK_API.md](SDK_API.md) SDK 레퍼런스 ·
 [OVERVIEW.md](OVERVIEW.md) 전체 개념과 흐름
 

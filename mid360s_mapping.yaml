@@ -1,0 +1,73 @@
+/**:
+    ros__parameters:
+        # ═══════════════════════════════════════════════════════════
+        #  지도 작성용 설정 (mid360s_mapping.yaml)
+        # ═══════════════════════════════════════════════════════════
+        #  Nav2 를 함께 돌리지 않으므로 CPU 여유가 있다. 품질을 올린다.
+        #  주행용은 mid360s.yaml 을 쓴다 — 그쪽은 부하를 낮춘 설정이다.
+        #
+        #  사용:
+        #    ros2 launch fast_lio mapping.launch.py \
+        #        config_file:=mid360s_mapping.yaml
+        #
+        #  ★ 반드시 `ros2 topic hz /Odometry` 로 10Hz 유지를 확인할 것.
+        #    밀리면 품질이 아니라 위치가 깨진다. 그때는 아래 세 값을
+        #    한 단계씩 되돌린다:
+        #        point_filter_num 2 → 3 → 4
+        #        max_iteration    5 → 4 → 3
+        #        filter_size_*  0.2 → 0.3 → 0.5
+        # ═══════════════════════════════════════════════════════════
+
+        feature_extract_enable: false
+
+        # ── 품질 우선 ────────────────────────────────────────────────
+        point_filter_num: 2          # 2개 중 1개 사용 (주행용은 4)
+        max_iteration: 5             # 정합 반복 (주행용은 3)
+        filter_size_surf: 0.2        # 입력 다운샘플 [m] (주행용 0.5)
+        filter_size_map: 0.2         # 지도 다운샘플 [m] (주행용 0.5)
+
+        cube_side_length: 500.0      # 지도 유지 범위 [m]
+        runtime_pos_log_enable: false
+        map_file_path: "/home/hong/g1_real/maps/lab.pcd"
+
+        common:
+            lid_topic:  "/livox/lidar"
+            imu_topic:  "/livox/imu"
+            time_sync_en: false
+            time_offset_lidar_to_imu: 0.0
+
+        preprocess:
+            lidar_type: 1
+            scan_line:  4
+            blind: 0.8               # 로봇 자기 몸 제외 [m]
+            timestamp_unit: 3
+            scan_rate: 10
+
+        mapping:
+            # 보행 진동 때문에 IMU 를 덜 신뢰하는 것은 지도 작성 때도 같다.
+            acc_cov: 0.3
+            gyr_cov: 0.3
+            b_acc_cov: 0.0001
+            b_gyr_cov: 0.0001
+
+            fov_degree:    360.0
+            det_range:     50.0      # 주행용(30)보다 넓게 — 지도를 크게 만든다
+
+            # 방향 보정은 드라이버 config 의 roll:180 에서만 한다.
+            extrinsic_est_en:  false
+            extrinsic_T: [ -0.011, -0.02329, 0.04412 ]
+            extrinsic_R: [ 1., 0., 0.,
+                           0., 1., 0.,
+                           0., 0., 1.]
+
+        publish:
+            path_en: true
+            effect_map_en: false
+            map_en: true
+            scan_publish_en:  true
+            dense_publish_en: false
+            scan_bodyframe_pub_en: true
+
+        pcd_save:
+            pcd_save_en: true
+            interval: -1

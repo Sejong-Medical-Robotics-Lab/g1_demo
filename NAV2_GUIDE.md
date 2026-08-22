@@ -56,13 +56,28 @@ cd ~/ws_fastlio && colcon build --symlink-install
 
 | | mapping (지도용) | 기본 (주행용) |
 |---|---|---|
-| `point_filter_num` | 2 | 4 |
+| `point_filter_num` | 2 | 3 |
 | `max_iteration` | 5 | 3 |
-| `filter_size_*` | 0.2 | 0.5 |
-| `det_range` | 50 | 30 |
+| `filter_size_*` | 0.2 | 0.3 |
 
-지도용은 **Nav2 를 같이 안 돌리므로 CPU 여유가 있어** 품질을 올렸다.
-주행용은 Nav2 와 CPU 를 나눠 쓰므로 가볍게 유지한다.
+지도용은 Nav2 를 같이 안 돌리므로 CPU 여유가 있어 품질을 조금 더 올렸다.
+**차이는 이 정도로만 둔다.**
+
+> ### ★ 필터를 세게 걸면 안 된다
+>
+> 주행용 부하를 줄이려고 `point_filter_num: 4` + `filter_size: 0.5` +
+> `blind: 0.8` + `det_range: 30` 을 한꺼번에 걸었더니
+>
+> ```
+> No Effective Points!
+> ```
+>
+> 이 매 프레임 떴다. **정합에 쓸 점이 남지 않아 FAST-LIO 가 위치 추정을
+> 포기한 것**이다. TF 가 날뛰고 AMCL 도 함께 무너져 로봇이 튀었다.
+>
+> **오도메트리가 깨지는 것보다 CPU 를 더 쓰는 편이 낫다.**
+> 부하가 문제면 `point_filter_num` 을 **한 번에 한 단계씩만** 올리고
+> 매번 `ros2 topic hz /Odometry` 로 10Hz 를 확인한다.
 
 ---
 
@@ -308,6 +323,8 @@ Map / LaserScan / particlecloud / 경로 표시와 **2D Pose Estimate·2D Goal P
 | 목표 근처에서 뱅뱅 돈다 | `xy_goal_tolerance` 를 0.5 로 올린다 |
 | 지도와 스캔이 안 맞는다 | 지도를 만든 뒤 공간이 바뀌었을 수 있다. 다시 만든다 |
 | 걷다가 위치를 잃는다 | `ros2 topic hz /Odometry` 가 10Hz 인지. 낮으면 CPU 부하 |
+| **`No Effective Points!`** | FAST-LIO 가 정합할 점을 못 찾는 것. `point_filter_num`·`filter_size_*`·`blind` 를 낮추고 `det_range` 를 키운다 |
+| TF 축이 날뛴다 | 위와 같은 원인. FAST-LIO 오도메트리가 깨진 것이다 |
 
 **AMCL 이 위치를 잃었을 때**는 로봇을 멈추고 `2D Pose Estimate` 로
 다시 찍으면 회복된다.
