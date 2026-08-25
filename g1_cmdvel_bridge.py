@@ -39,6 +39,14 @@ ROS 2 Jazzy 의 cyclonedds(0.10.4)와 SDK 가 요구하는 0.10.2 가 충돌해
     python3 g1_cmdvel_bridge.py --iface $G1_IFACE
     python3 g1_cmdvel_bridge.py --iface $G1_IFACE --dry-run   # 로봇 없이 수신만 확인
 
+※ 실행 하한선 기본 켜짐 (2026-08-25 실기체 실측 기반):
+   - 전진 중 회전: 0.10 미만 → 0.10 으로 (호 회전은 0.10 부터 정상)
+   - 제자리 회전: 0.25 미만 → 0.25 로 ★중요: G1 은 작은 제자리 회전
+     명령(≤0.15)을 받으면 돌지 않고 옆걸음으로 벽까지 미끄러진다.
+     0.25 부터 정상 회전을 실기체로 확인했다.
+   - 전진: 0.05 미만 → 0.05
+   끄려면 각각 0 을 넘긴다 (--min-vyaw 0 등).
+
 테스트(로봇을 실제로 걷게 한다 — 행어·공간·리모컨 확인 후):
     ros2 topic pub -r 10 /cmd_vel geometry_msgs/msg/Twist \\
         "{linear: {x: 0.2}, angular: {z: 0.0}}"
@@ -74,6 +82,43 @@ def main():
     ap.add_argument("--max-vx", type=float, default=LIMIT_VX)
     ap.add_argument("--max-vy", type=float, default=LIMIT_VY)
     ap.add_argument("--max-vyaw", type=float, default=LIMIT_VYAW)
+    # ── 트림(보정 편향) ──────────────────────────────────────────────
+    # 로봇이 직진 명령에도 일정하게 한쪽으로 새는 경우(보행 비대칭,
+    # 라이다 장착 yaw 오차 등)를 상수로 상쇄한다. 비행기의 트림 탭과
+    # 같은 개념. 전진 중일 때만 더해지고, 정지·데드맨 상태에는 절대
+    # 더해지지 않는다(안전).
+    #
+    # 값 찾는 법: Nav2 끄고 순수 직진을 보내 어느 쪽으로 새는지 관찰 —
+    #   ros2 topic pub -r 10 /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.12}}"
+    # 오른쪽으로 새면 --trim-vyaw 를 +0.02 부터 조금씩 올려가며(+ = 좌회전)
+    # 직진이 되는 값을 찾는다. 좌우 걸음(vy)으로 잡고 싶으면 --trim-vy
+    # (+ = 왼쪽 사이드스텝).
+    ap.add_argument("--trim-vyaw", type=float, default=0.0,
+                    help="전진 중 항상 더할 회전 편향 [rad/s], + = 좌회전")
+    ap.add_argument("--trim-vy", type=float, default=0.0,
+                    help="전진 중 항상 더할 횡이동 편향 [m/s], + = 왼쪽")
+    # ── 실행 하한선(데드밴드 보상) ──────────────────────────────────
+    # G1 보행 컨트롤러는 아주 작은 속도 명령을 무시한다(데드밴드).
+    # 실주행에서 확인된 증상: Nav2 가 vyaw=0.04 처럼 작은 회전을 계속
+    # 보내는데 로봇은 미동도 없음 → 진행 감시기가 "Failed to make
+    # progress" 로 중단. 0이 아닌 명령이 이 하한보다 작으면 부호를
+    # 유지한 채 하한값으로 올려서, 보내는 명령 = 실행되는 명령이 되게
+    # 한다. 0 명령(정지)은 절대 건드리지 않는다.
+    # 하한값 찾기: ros2 topic pub 으로 회전만 0.05→0.08→0.10 올려가며
+    # 로봇이 실제로 돌기 시작하는 값을 확인해서 넣는다.
+    ap.add_argument("--min-vyaw", type=float, default=0.10,
+                    help="전진 중(|vx|>0.02) 0이 아닌 회전 명령의 실행 하한 "
+                         "[rad/s] (0=끔). 걸으면서 도는 호는 0.10 부터 잘 "
+                         "동작함을 실주행으로 확인 (2026-08-25)")
+    ap.add_argument("--min-vyaw-inplace", type=float, default=0.25,
+                    help="제자리 회전(|vx|<0.02) 시 회전 명령의 실행 하한 "
+                         "[rad/s]. ★ G1 은 이보다 작은 제자리 회전 명령을 "
+                         "받으면 돌지 않고 옆걸음으로 미끄러져 위험하다 — "
+                         "0.15 에서 게걸음으로 벽에 간 것을 실기체로 확인, "
+                         "0.25 부터 정상 회전 확인 (2026-08-25)")
+    ap.add_argument("--min-vx", type=float, default=0.05,
+                    help="0이 아닌 전진 명령의 실행 하한 [m/s] (0=기능 끔). "
+                         "기본 0.05")
     args = ap.parse_args()
 
     import os
@@ -128,6 +173,8 @@ def main():
             self.get_logger().info(
                 f"안전 상한 |vx|≤{args.max_vx} |vy|≤{args.max_vy} "
                 f"|vyaw|≤{args.max_vyaw}"
+                + (f"   트림 vyaw{args.trim_vyaw:+.3f} vy{args.trim_vy:+.3f}"
+                   if (args.trim_vyaw or args.trim_vy) else "")
                 + ("   [DRY-RUN — 로봇에 보내지 않음]" if args.dry_run else ""))
 
         def on_cmd(self, msg):
@@ -140,6 +187,27 @@ def main():
             # /cmd_vel 이 끊기면 정지 — Nav2 가 죽어도 로봇은 선다
             fresh = (time.monotonic() - self.last_cmd) < CMD_TIMEOUT
             vx, vy, vyaw = (self.vx, self.vy, self.vyaw) if fresh else (0.0, 0.0, 0.0)
+
+            # 트림: 실제로 전진 중일 때만 편향을 더한다.
+            # 정지·데드맨(위에서 0 처리됨)·제자리 회전에는 안 더한다 —
+            # 새는 건 걷는 동안이고, 서 있는 로봇을 트림이 움직이면 안 된다.
+            if fresh and abs(vx) > 0.02:
+                vy = clamp(vy + args.trim_vy, args.max_vy)
+                vyaw = clamp(vyaw + args.trim_vyaw, args.max_vyaw)
+
+            # 실행 하한선: 0이 아닌 작은 명령을 로봇이 실제로 실행하는
+            # 최소값까지 끌어올린다 (부호 유지, 0은 그대로 0).
+            # ★ 회전 하한은 상황에 따라 다르다 (2026-08-25 실기체 확인):
+            #   - 전진 중 호 회전: 0.10 부터 정상
+            #   - 제자리 회전:     0.25 미만이면 돌지 않고 옆걸음으로
+            #     미끄러진다(게걸음 → 벽 충돌 위험). 그래서 더 높은
+            #     하한을 적용해 그 위험 구간의 명령이 아예 안 나가게 한다.
+            moving = abs(vx) >= 0.02
+            yaw_floor = args.min_vyaw if moving else args.min_vyaw_inplace
+            if yaw_floor > 0 and 1e-6 < abs(vyaw) < yaw_floor:
+                vyaw = yaw_floor if vyaw > 0 else -yaw_floor
+            if args.min_vx > 0 and 1e-6 < abs(vx) < args.min_vx:
+                vx = args.min_vx if vx > 0 else -args.min_vx
 
             moving = any(abs(v) > 1e-6 for v in (vx, vy, vyaw))
             if moving:
