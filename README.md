@@ -24,9 +24,9 @@
 | `g1_mapping.rviz` | Nav2 | 지도 작성용 RViz 설정 |
 | `g1_slam.launch.py` | — | (구) 오도메트리 없는 2D SLAM — 참고용 |
 | `g1_nav2.launch.py` | — | (구) 지도 없이 주행 — 참고용 | 
-| `g1_pose_action.py` | — | pose로 모션제어 |
-| `g1_voice_action.py`| — | voice로 모션제어 |
-| `g1_P_A_action.py`| — | pose와 voice 병합 |
+| `g1_pose_action.py` | 4 | pose로 모션제어 |
+| `g1_voice_action.py`| 4 | voice로 모션제어 |
+| `g1_P_A_action.py`| 4 | pose와 voice 병합 |
 
 문서: [PROGRESS.md](PROGRESS.md) 진행 상황·확정값 · [NAV2_GUIDE.md](NAV2_GUIDE.md) Nav2 실행 순서 ·
 [POSE_GUIDE.md](POSE_GUIDE.md) 자세 인식 실행 순서 · [CAMERA_SETUP.md](CAMERA_SETUP.md) 카메라 연결 기록 ·
