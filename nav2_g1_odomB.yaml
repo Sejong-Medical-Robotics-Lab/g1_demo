@@ -125,7 +125,7 @@ controller_server:
 
       # ★ 속도 상한 — g1_cmdvel_bridge 의 clamp 와 맞춰 둔다
       min_vel_x: 0.0
-      max_vel_x: 0.15
+      max_vel_x: 0.18
       min_vel_y: 0.0
       max_vel_y: 0.0                  # 횡이동 사용 안 함
       # ★ 회전이 SLAM 을 가장 크게 흔든다. 휴머노이드 제자리 회전은
@@ -145,7 +145,7 @@ controller_server:
       vx_samples: 10
       vy_samples: 1
       vtheta_samples: 20
-      sim_time: 2.0
+      sim_time: 1.2                   # 좁은 구간에서 혼합 호 허용 — 따로따로 동작 수정 (2026-08-26)
       linear_granularity: 0.05
       angular_granularity: 0.025
       transform_tolerance: 1.0        # 보행 진동을 감안해 느슨하게
@@ -156,17 +156,17 @@ controller_server:
 
       critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign",
                 "PathAlign", "PathDist", "GoalDist"]
-      BaseObstacle.scale: 0.02
+      BaseObstacle.scale: 10.0   # 벽 회피 배점 부여 — 스타카토 코너링 수정 (2026-08-26)
       PathAlign.scale: 16.0
-      PathAlign.forward_point_distance: 0.1
+      PathAlign.forward_point_distance: 0.325
       oscillation_reset_angle: 0.6    # 한 번 고른 회전 방향을 34도까지 유지 — 180도 복귀 좌우 씰룩 봉쇄 (2026-08-25)
       GoalAlign.scale: 12.0
-      GoalAlign.forward_point_distance: 0.1
+      GoalAlign.forward_point_distance: 0.325
       PathDist.scale: 32.0
       GoalDist.scale: 24.0
       # 제자리 회전 비중을 낮춘다. 값이 크면 목표 방향으로 먼저 홱 돌려 하는데,
       # 그 회전이 위치 추정을 가장 크게 흔든다.
-      RotateToGoal.scale: 8.0
+      RotateToGoal.scale: 4.0
       RotateToGoal.slowing_factor: 10.0
       RotateToGoal.lookahead_time: -1.0
 
@@ -205,7 +205,7 @@ local_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 5.0
-        inflation_radius: 0.40   # 0.45→0.40 (2026-08-26, 바닥은 로봇 반경 0.4)
+        inflation_radius: 0.48   # 0.55 는 손시공 구역 협착 증폭 (navF_180002 부검) — 중간값 (2026-08-26)
 
       always_send_full_costmap: true
 
@@ -249,7 +249,7 @@ global_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 5.0
-        inflation_radius: 0.40   # 0.45→0.40 (2026-08-26, 바닥은 로봇 반경 0.4)
+        inflation_radius: 0.48   # 0.55 는 손시공 구역 협착 증폭 (navF_180002 부검) — 중간값 (2026-08-26)
 
       always_send_full_costmap: true
 
@@ -292,8 +292,8 @@ velocity_smoother:
     smoothing_frequency: 5.0
     scale_velocities: false
     feedback: "OPEN_LOOP"
-    max_velocity: [0.15, 0.0, 0.3]
-    min_velocity: [-0.15, 0.0, -0.3]
+    max_velocity: [0.18, 0.0, 0.3]
+    min_velocity: [-0.18, 0.0, -0.3]
     max_accel: [0.3, 0.0, 0.5]
     max_decel: [-0.3, 0.0, -0.5]
     odom_topic: "/Odometry"
