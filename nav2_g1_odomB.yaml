@@ -120,87 +120,55 @@ controller_server:
     # DWB — 차동구동처럼 다룬다(전진 + 제자리 회전).
     # G1 은 vy(횡이동)도 되지만 전진보다 불안정하므로 쓰지 않는다.
     FollowPath:
-      # ── MPPI 이식 (erasers g1_ws 참조, 우리 제약으로 조정) 2026-08-26 심야 ──
-      plugin: "nav2_mppi_controller::MPPIController"
-      time_steps: 20
-      model_dt: 0.1
-      batch_size: 300
-      ax_max: 0.5
-      ax_min: -0.5
-      ay_max: 0.0
-      az_max: 0.5
-      vx_std: 0.06
-      vy_std: 0.0
-      wz_std: 0.12
-      vx_max: 0.18
-      vx_min: 0.0
-      vy_max: 0.0
-      wz_max: 0.3
-      iteration_count: 1
-      prune_distance: 1.2
-      transform_tolerance: 1.0
-      temperature: 0.3
-      gamma: 0.015
-      motion_model: "DiffDrive"
-      visualize: false
-      regenerate_noises: false
-      TrajectoryVisualizer:
-        trajectory_step: 5
-        time_step: 3
-      critics: ["ConstraintCritic", "ObstaclesCritic", "GoalCritic",
-                "GoalAngleCritic", "PathAlignCritic", "PathFollowCritic",
-                "PathAngleCritic", "PreferForwardCritic"]
-      ConstraintCritic:
-        enabled: true
-        cost_power: 1
-        cost_weight: 4.0
-      GoalCritic:
-        enabled: true
-        cost_power: 1
-        cost_weight: 5.0
-        threshold_to_consider: 1.4
-      GoalAngleCritic:
-        enabled: true
-        cost_power: 1
-        cost_weight: 3.0
-        threshold_to_consider: 0.5
-      PreferForwardCritic:
-        enabled: true
-        cost_power: 1
-        cost_weight: 5.0
-        threshold_to_consider: 0.5
-      ObstaclesCritic:
-        enabled: true
-        cost_power: 1
-        repulsion_weight: 1.5
-        critical_weight: 20.0
-        consider_footprint: false
-        collision_cost: 10000.0
-        collision_margin_distance: 0.10
-        near_goal_distance: 0.5
-      PathAlignCritic:
-        enabled: true
-        cost_power: 1
-        cost_weight: 14.0
-        max_path_occupancy_ratio: 0.05
-        trajectory_point_step: 4
-        threshold_to_consider: 0.5
-        offset_from_furthest: 20
-        use_path_orientations: false
-      PathFollowCritic:
-        enabled: true
-        cost_power: 1
-        cost_weight: 5.0
-        offset_from_furthest: 5
-        threshold_to_consider: 1.4
-      PathAngleCritic:
-        enabled: true
-        cost_power: 1
-        cost_weight: 2.0
-        offset_from_furthest: 4
-        threshold_to_consider: 0.5
-        max_angle_to_furthest: 1.0
-        mode: 0
+      plugin: "dwb_core::DWBLocalPlanner"
+      debug_trajectory_details: true
+
+      # ★ 속도 상한 — g1_cmdvel_bridge 의 clamp 와 맞춰 둔다
+      min_vel_x: 0.0
+      max_vel_x: 0.18
+      min_vel_y: 0.0
+      max_vel_y: 0.0                  # 횡이동 사용 안 함
+      # ★ 회전이 SLAM 을 가장 크게 흔든다. 휴머노이드 제자리 회전은
+      #   진동이 커서 FAST-LIO 의 위치 추정이 어긋난다.
+      max_vel_theta: 0.3        # 제자리 회전 실효 하한(0.25)보다 위여야 함 (2026-08-25)
+      min_speed_xy: 0.0
+      max_speed_xy: 0.25
+      min_speed_theta: 0.0
+
+      acc_lim_x: 0.5
+      acc_lim_y: 0.0
+      acc_lim_theta: 0.5
+      decel_lim_x: -0.5
+      decel_lim_y: 0.0
+      decel_lim_theta: -0.5
+
+      vx_samples: 10
+      vy_samples: 1
+      vtheta_samples: 20
+      sim_time: 1.2                   # 좁은 구간에서 혼합 호 허용 — 따로따로 동작 수정 (2026-08-26)
+      linear_granularity: 0.05
+      angular_granularity: 0.025
+      transform_tolerance: 1.0        # 보행 진동을 감안해 느슨하게
+      xy_goal_tolerance: 0.35
+      trans_stopped_velocity: 0.05
+      short_circuit_trajectory_evaluation: true
+      stateful: true
+
+      critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign",
+                "PathAlign", "PathDist", "GoalDist"]
+      BaseObstacle.scale: 10.0   # 벽 회피 배점 부여 — 스타카토 코너링 수정 (2026-08-26)
+      PathAlign.scale: 16.0
+      PathAlign.forward_point_distance: 0.325
+      oscillation_reset_angle: 0.6    # 한 번 고른 회전 방향을 34도까지 유지 — 180도 복귀 좌우 씰룩 봉쇄 (2026-08-25)
+      GoalAlign.scale: 12.0
+      GoalAlign.forward_point_distance: 0.325
+      PathDist.scale: 32.0
+      GoalDist.scale: 24.0
+      # 제자리 회전 비중을 낮춘다. 값이 크면 목표 방향으로 먼저 홱 돌려 하는데,
+      # 그 회전이 위치 추정을 가장 크게 흔든다.
+      RotateToGoal.scale: 4.0
+      RotateToGoal.slowing_factor: 10.0
+      RotateToGoal.lookahead_time: -1.0
 
 local_costmap:
   local_costmap:
