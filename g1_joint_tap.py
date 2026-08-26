@@ -58,8 +58,17 @@ class JointTap(Node):
 def main():
     rclpy.init()
     node = JointTap()
+    # LowState 스트림엔 간헐적으로 파이썬 변환 불가 패킷(독약 메시지)이 섞인다.
+    # 그 한 개 때문에 프로세스가 죽지 않도록, 메시지 단위로 삼키고 계속 돈다.
+    bad = 0
     try:
-        rclpy.spin(node)
+        while rclpy.ok():
+            try:
+                rclpy.spin_once(node, timeout_sec=0.2)
+            except RuntimeError as e:
+                bad += 1
+                if bad % 50 == 1:
+                    node.get_logger().warn(f"변환 불가 메시지 건너뜀 (누적 {bad}) — {e}")
     except KeyboardInterrupt:
         pass
     node.destroy_node()

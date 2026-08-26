@@ -74,6 +74,7 @@ def generate_launch_description():
             package="pointcloud_to_laserscan",
             executable="pointcloud_to_laserscan_node",
             name="pointcloud_to_laserscan",
+            respawn=True, respawn_delay=1.0,   # 스캔 정지 사건 대비 자동 부활 (2026-08-26)
             remappings=[("cloud_in", "/livox/lidar"),
                         ("scan", "/scan")],
             parameters=[{

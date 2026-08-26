@@ -46,9 +46,12 @@ def generate_launch_description():
         DeclareLaunchArgument("model", default_value="true"),
 
         # ── 릴레이 2종 (심장) ──
-        ExecuteProcess(cmd=["python3", os.path.join(HERE, "g1_odom_relay.py")],
+        # 주의: ExecuteProcess 에 respawn 을 달자 이 환경에서 relay 가
+        # 기동 자체를 안 하는 증상 확인 (2026-08-26 저녁) — 18:00 검증형태로 원복.
+        # relay 부활은 필요 시 bash 루프 방식으로 별도 구현할 것.
+        ExecuteProcess(cmd=["python3", "-u", os.path.join(HERE, "g1_odom_relay.py")],
                        name="odom_relay", output="screen"),
-        ExecuteProcess(cmd=["python3", os.path.join(HERE, "g1_joint_relay.py")],
+        ExecuteProcess(cmd=["python3", "-u", os.path.join(HERE, "g1_joint_relay.py")],
                        name="joint_relay", output="screen"),
 
         # ── G1 모형 (실관절 — joint_relay 가 /joint_states 공급) ──
