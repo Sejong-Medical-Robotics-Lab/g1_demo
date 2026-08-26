@@ -38,7 +38,10 @@ def generate_launch_description():
     use_rviz = LaunchConfiguration("rviz")
 
     nav2_bringup_dir = get_package_share_directory("nav2_bringup")
-    default_rviz = os.path.join(nav2_bringup_dir, "rviz", "nav2_default_view.rviz")
+    # 전용 화면 설정(모형 자동표시·TF축 3개만) 우선, 없으면 nav2 기본
+    _custom_rviz = os.path.expanduser("~/g1_real/g1_demo.rviz")
+    default_rviz = _custom_rviz if os.path.exists(_custom_rviz) \
+        else os.path.join(nav2_bringup_dir, "rviz", "nav2_default_view.rviz")
 
     return LaunchDescription([
         DeclareLaunchArgument("params_file", default_value=default_params),
