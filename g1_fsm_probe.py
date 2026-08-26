@@ -99,7 +99,7 @@ def main():
     ap.add_argument("--domain", type=int, default=0)
     ap.add_argument("--fsm", type=int, help="이 FSM ID 하나만 보내고 종료")
     ap.add_argument("--watch", action="store_true", help="전송 없이 FSM 만 관찰")
-    ap.add_argument("--sec", type=float, default=8.0, help="전송 후 관찰 시간")
+    ap.add_argument("--sec", type=float, default=4.0, help="전송 후 관찰 시간 (8→4, 2026-08-26)")
     args = ap.parse_args()
 
     banner("FSM 전이 사슬 실측 — 한 번에 하나씩만 보낸다")

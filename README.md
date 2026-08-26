@@ -9,16 +9,17 @@ Unitree G1 휴머노이드: 기본 제어 · LiDAR · Nav2 자율주행 · Media
 로봇 내장 오도메트리(51Hz, /state_estimator/odom_pelvis)를 기반으로
 AMCL 위치추정 + Nav2 주행. FAST-LIO 는 지도 "제작" 때만 쓴다.
 
-**기동 — 터미널 6개:**
+**기동 — 터미널 4+1개:**
 
 | # | 터미널 | 명령 |
 |---|---|---|
 | 1 | lidar | `ros2 launch livox_ros_driver2 pc2_MID360s_launch.py` |
-| 2 | tap ★특수 | `source ~/g1_real/tapenv.sh` → `python3 ~/g1_real/g1_odom_tap_ros.py` |
-| 3 | relay | `python3 ~/g1_real/g1_odom_relay.py` |
-| 4 | 브리지 | `g1ros` → `python3 ~/g1_real/g1_cmdvel_bridge.py --iface $G1_IFACE` |
-| 5 | Nav2 | `ros2 launch ~/g1_real/g1_nav2_odomB.launch.py 2>&1 \| tee ~/g1_real/logs/navB_$(date +%H%M%S).log` |
-| 6 | 예비 | `set_pose.sh` · `clearmap.sh` · 검증 |
+| 2 | tap ★특수 | `source ~/g1_real/tapenv.sh` → `bash ~/g1_real/run_taps.sh` |
+| 3 | 브리지 | `g1ros` → `python3 ~/g1_real/g1_cmdvel_bridge.py --iface $G1_IFACE` |
+| 4 | 본체 | `ros2 launch ~/g1_real/g1_nav2_full.launch.py 2>&1 \| tee ~/g1_real/logs/navF_$(date +%H%M%S).log` |
+| 5 | 예비 | `set_pose.sh` · `clearmap.sh` |
+
+(본체 = relay 2종 + G1 모형 + Nav2 통합. 모형 제외: `model:=false`)
 
 RViz: 초기위치(안 되면 `set_pose.sh <각도>`) → `clearmap.sh` →
 직진(반환점은 벽 1m+) → `clearmap.sh` → 복귀. 추종자는 대각선 측면.
