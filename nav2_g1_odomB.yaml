@@ -125,22 +125,22 @@ controller_server:
 
       # ★ 속도 상한 — g1_cmdvel_bridge 의 clamp 와 맞춰 둔다
       min_vel_x: 0.0
-      max_vel_x: 0.18
+      max_vel_x: 0.5      # [날것실험] erasers 논제 검증 (2026-08-27)
       min_vel_y: 0.0
       max_vel_y: 0.0                  # 횡이동 사용 안 함
       # ★ 회전이 SLAM 을 가장 크게 흔든다. 휴머노이드 제자리 회전은
       #   진동이 커서 FAST-LIO 의 위치 추정이 어긋난다.
-      max_vel_theta: 0.3        # 제자리 회전 실효 하한(0.25)보다 위여야 함 (2026-08-25)
+      max_vel_theta: 0.6      # [날것실험] (2026-08-27)
       min_speed_xy: 0.0
-      max_speed_xy: 0.25
+      max_speed_xy: 0.5
       min_speed_theta: 0.0
 
-      acc_lim_x: 0.5
+      acc_lim_x: 1.0
       acc_lim_y: 0.0
-      acc_lim_theta: 0.5
-      decel_lim_x: -0.5
+      acc_lim_theta: 1.0
+      decel_lim_x: -1.0
       decel_lim_y: 0.0
-      decel_lim_theta: -0.5
+      decel_lim_theta: -1.0
 
       vx_samples: 10
       vy_samples: 1
@@ -157,12 +157,12 @@ controller_server:
       critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign",
                 "PathAlign", "PathDist", "GoalDist"]
       BaseObstacle.scale: 10.0   # 벽 회피 배점 부여 — 스타카토 코너링 수정 (2026-08-26)
-      PathAlign.scale: 16.0
+      PathAlign.scale: 10.0   # 경로 노예 완화 (2026-08-27)
       PathAlign.forward_point_distance: 0.325
       oscillation_reset_angle: 0.6    # 한 번 고른 회전 방향을 34도까지 유지 — 180도 복귀 좌우 씰룩 봉쇄 (2026-08-25)
       GoalAlign.scale: 12.0
       GoalAlign.forward_point_distance: 0.325
-      PathDist.scale: 32.0
+      PathDist.scale: 20.0   # 경로이탈 혐오 완화 (2026-08-27)
       GoalDist.scale: 24.0
       # 제자리 회전 비중을 낮춘다. 값이 크면 목표 방향으로 먼저 홱 돌려 하는데,
       # 그 회전이 위치 추정을 가장 크게 흔든다.
@@ -182,7 +182,7 @@ local_costmap:
       width: 6
       height: 6
       resolution: 0.05
-      robot_radius: 0.40              # G1 을 넉넉히 감싸는 원. 팔 폭 고려
+      robot_radius: 0.30              # 실측 교정 — 통과판정은 몸값, 거리는 부풀림 몫 (2026-08-27)
       plugins: ["obstacle_layer", "inflation_layer"]
 
       obstacle_layer:
@@ -204,7 +204,7 @@ local_costmap:
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 5.0
+        cost_scaling_factor: 3.0   # 기피 압력 강화 — 숫자↓=효과↑ (2026-08-27)
         inflation_radius: 0.48   # 0.55 는 손시공 구역 협착 증폭 (navF_180002 부검) — 중간값 (2026-08-26)
 
       always_send_full_costmap: true
@@ -217,7 +217,7 @@ global_costmap:
       publish_frequency: 1.0
       global_frame: map
       robot_base_frame: base_link
-      robot_radius: 0.40
+      robot_radius: 0.30
       resolution: 0.05
       # ★ 사전 지도를 쓰므로 롤링 윈도우가 아니다. 지도 전체를 놓고
       #   경로를 계획한다 — 벽 뒤로 돌아가는 경로도 찾을 수 있다.
@@ -248,7 +248,7 @@ global_costmap:
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 5.0
+        cost_scaling_factor: 3.0   # 기피 압력 강화 — 숫자↓=효과↑ (2026-08-27)
         inflation_radius: 0.48   # 0.55 는 손시공 구역 협착 증폭 (navF_180002 부검) — 중간값 (2026-08-26)
 
       always_send_full_costmap: true
@@ -292,9 +292,9 @@ velocity_smoother:
     smoothing_frequency: 5.0
     scale_velocities: false
     feedback: "OPEN_LOOP"
-    max_velocity: [0.18, 0.0, 0.3]
-    min_velocity: [-0.18, 0.0, -0.3]
-    max_accel: [0.3, 0.0, 0.5]
+    max_velocity: [0.5, 0.0, 0.6]
+    min_velocity: [-0.5, 0.0, -0.6]
+    max_accel: [1.0, 0.0, 1.0]
     max_decel: [-0.3, 0.0, -0.5]
     odom_topic: "/Odometry"
     odom_duration: 0.1

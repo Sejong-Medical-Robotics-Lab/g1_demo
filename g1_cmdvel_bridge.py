@@ -39,7 +39,10 @@ ROS 2 Jazzy 의 cyclonedds(0.10.4)와 SDK 가 요구하는 0.10.2 가 충돌해
     python3 g1_cmdvel_bridge.py --iface $G1_IFACE
     python3 g1_cmdvel_bridge.py --iface $G1_IFACE --dry-run   # 로봇 없이 수신만 확인
 
-※ 실행 하한선 기본 켜짐 (2026-08-25 실기체 실측 기반):
+※ 하한선 기본 폐지 (2026-08-27): 속도 상향(0.5) 체제에서 하한 불필요 실증
+   — 저속(0.15 이하) 운용으로 돌아갈 때만 인자로 부활시킬 것:
+     --min-vx 0.10 --min-vyaw 0.10 --min-vyaw-inplace 0.25
+   (구 실측 기록 보존용 원문: 실행 하한선 실기체 실측 기반):
    - 전진 중 회전: 0.10 미만 → 0.10 으로 (호 회전은 0.10 부터 정상)
    - 제자리 회전: 0.25 미만 → 0.25 로 ★중요: G1 은 작은 제자리 회전
      명령(≤0.15)을 받으면 돌지 않고 옆걸음으로 벽까지 미끄러진다.
@@ -57,9 +60,9 @@ import sys
 import time
 
 # ── 안전 상한 (g1_walk_test.py 와 동일) ──────────────────────────────
-LIMIT_VX = 0.3      # m/s   전후
-LIMIT_VY = 0.2      # m/s   좌우
-LIMIT_VYAW = 0.4    # rad/s 회전
+LIMIT_VX = 1.0    # 날것 기본 (2026-08-27 검증) — 실질 상한은 Nav2 yaml 0.5
+LIMIT_VY = 0.5    # 날것 기본 (2026-08-27)
+LIMIT_VYAW = 2.0  # 날것 기본 (2026-08-27) — 실질 상한은 Nav2 yaml 0.6
 
 SEND_PERIOD = 0.2    # SetVelocity 재전송 주기 [s]
 CMD_DURATION = 0.5   # 명령 유효 시간 [s] — 데드맨. SEND_PERIOD 보다 커야 한다
@@ -106,17 +109,17 @@ def main():
     # 한다. 0 명령(정지)은 절대 건드리지 않는다.
     # 하한값 찾기: ros2 topic pub 으로 회전만 0.05→0.08→0.10 올려가며
     # 로봇이 실제로 돌기 시작하는 값을 확인해서 넣는다.
-    ap.add_argument("--min-vyaw", type=float, default=0.10,
+    ap.add_argument("--min-vyaw", type=float, default=0.0,
                     help="전진 중(|vx|>0.02) 0이 아닌 회전 명령의 실행 하한 "
                          "[rad/s] (0=끔). 걸으면서 도는 호는 0.10 부터 잘 "
                          "동작함을 실주행으로 확인 (2026-08-25)")
-    ap.add_argument("--min-vyaw-inplace", type=float, default=0.25,
+    ap.add_argument("--min-vyaw-inplace", type=float, default=0.0,
                     help="제자리 회전(|vx|<0.02) 시 회전 명령의 실행 하한 "
                          "[rad/s]. ★ G1 은 이보다 작은 제자리 회전 명령을 "
                          "받으면 돌지 않고 옆걸음으로 미끄러져 위험하다 — "
                          "0.15 에서 게걸음으로 벽에 간 것을 실기체로 확인, "
                          "0.25 부터 정상 회전 확인 (2026-08-25)")
-    ap.add_argument("--min-vx", type=float, default=0.05,
+    ap.add_argument("--min-vx", type=float, default=0.0,
                     help="0이 아닌 전진 명령의 실행 하한 [m/s] (0=기능 끔). "
                          "기본 0.05")
     args = ap.parse_args()
