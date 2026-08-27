@@ -9,18 +9,17 @@
 ## 실행 
 ```
 ① 개발·연습 — 노트북 웹캠 + 마이크, 로봇 없이
-     python3 g1_combined_action.py --source 0 --dry-run
+     python3 g1_interaction_controlle.py --source 0 --dry-run
 
 ② 실전 — 로봇을 FSM 501 로 올린 뒤
      g1
-     python3 g1_stand_test.py --iface $G1_IFACE
-     python3 g1_combined_action.py --iface $G1_IFACE
-     python3 g1_combined_action.py --source 0 --dry-run          # 웹캠+마이크 둘 다 테스트
-     python3 g1_combined_action.py --iface $G1_IFACE              # 실전, 포즈+음성 동시
-     python3 g1_combined_action.py --iface $G1_IFACE --no-voice   # 포즈만
+     python3 g1_interaction_controller.py --iface $G1_IFACE
+     python3 g1_interaction_controlle.py --source 0 --dry-run          # 웹캠+마이크 둘 다 테스트
+     python3 g1_interaction_controlle.py --iface $G1_IFACE              # 실전, 포즈+음성 동시
+     python3 g1_interaction_controlle.py --iface $G1_IFACE --no-voice   # 포즈만
      
      
-     python3 g1_combined_action.py --iface $G1_IFACE --no-pose --mic-index 8  # 음성만
+     python3 g1_interaction_controlle.py --iface $G1_IFACE --no-pose --mic-index 8  # 음성만
 
   · 포즈나 음성 중 하나만 쓰고 싶으면 --no-voice 또는 --no-pose
   · q 또는 Esc(카메라 창) / Ctrl+C 로 종료
@@ -75,7 +74,7 @@ HAND_PINKY_MCP = 17
 - 기존 pose_action.py에 음성 출력 과 음성인식을 병합함
 - 안전거리 판별 알고리즘을 추가함.
 
-g1_pose_action.py 와 g1_speech.py, g1_person_distance.py는 동일파일에 있어야함.
+g1_interaction_controlle.py 와 g1_speech.py, g1_person_distance.py는 동일파일에 있어야함.
 
 # 포즈 맵
 
