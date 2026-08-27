@@ -1,72 +1,111 @@
-# G1 실기체 데모 — 실행 코드
+## 젯슨 접속 및 depth camera server on
 
-Unitree G1 휴머노이드: 기본 제어 · LiDAR · Nav2 자율주행 · MediaPipe
-제스처 대응 동작. 세부 개념과 이력은 `docs/`, 날짜별 작업 기록은
-`SESSION_*.md`.
-
-## 자율주행 — 현재 표준 (B안: 내장 오도메트리, 2026-08-25 확정)
-
-로봇 내장 오도메트리(51Hz, /state_estimator/odom_pelvis)를 기반으로
-AMCL 위치추정 + Nav2 주행. FAST-LIO 는 지도 "제작" 때만 쓴다.
-
-**기동 — 터미널 4+1개:**
-
-| # | 터미널 | 명령 |
-|---|---|---|
-| 1 | lidar | `ros2 launch livox_ros_driver2 pc2_MID360s_launch.py` |
-| 2 | tap ★특수 | `source ~/g1_real/tapenv.sh` → `bash ~/g1_real/run_taps.sh` |
-| 3 | 브리지 | `g1ros` → `python3 ~/g1_real/g1_cmdvel_bridge.py --iface $G1_IFACE` |
-| 4 | 본체 | `ros2 launch ~/g1_real/g1_nav2_full.launch.py 2>&1 \| tee ~/g1_real/logs/navF_$(date +%H%M%S).log` |
-| 5 | 예비 | `set_pose.sh` · `clearmap.sh` |
-
-(본체 = relay 2종 + G1 모형 + Nav2 통합. 모형 제외: `model:=false`)
-
-RViz: 초기위치(안 되면 `set_pose.sh <각도>`) → `clearmap.sh` →
-직진(반환점은 벽 1m+) → `clearmap.sh` → 복귀. 추종자는 대각선 측면.
-오래 세워뒀다 재개하면 초기위치 재설정(yaw 편류 분당 ~1도).
-
-**규칙:** tapenv 는 2번 터미널 전용(다른 ros2 명령 금지) /
-FAST-LIO 는 이 구성에서 띄우지 않음.
-
-## 파일 안내
-
-**자율주행 (B안 스택):**
-| 파일 | 역할 |
-|---|---|
-| `g1_odom_tap_ros.py` | 로봇 내장 오도메트리 구독(CycloneDDS) → UDP |
-| `g1_odom_relay.py` | UDP → `/odom` + TF(odom→base_link) |
-| `tapenv.sh` / `cyclonedds_g1.xml` / `ros_tap_setup.sh` | tap 환경·셋업 |
-| `g1_cmdvel_bridge.py` | `/cmd_vel` → SetVelocity (데드맨·클램프·이중 실행하한 0.10/0.25) |
-| `g1_nav2_odomB.launch.py` + `nav2_g1_odomB.yaml` | Nav2 (내장 odom 프레임) |
-| `nav.sh` / `set_pose.sh` / `clearmap.sh` | 로그 자동저장 · 초기위치 · costmap 청소 |
-
-**지도 (제작 시에만):** `g1_mapping_2d.launch.py`(slam_toolbox+루프클로저,
-FAST-LIO 오도메트리) → `maps/`(로컬), 루트 `lab_2d.*` 는 깃 등재 사본.
-
-**예비 (A안 — FAST-LIO 오도메트리 주행):** `g1_nav2_localize.launch.py`
-+ `nav2_g1_localize.yaml` — B 안정화 검증 전까지 보관.
-
-**기본 제어·시연:** `g1_real_sequence.py`(주 실행) · `g1_stand_test.py`
-· `g1_fsm_probe.py` · `g1_arm_probe.py` · `g1_walk_test.py` ·
-`g1_common.py`(공통 래퍼) · `g1_real_monitor.py` · `g1_imu_view.py`
-
-**제스처 인식 (시연 4):** `g1_cam_server.py`(Jetson, MJPEG) →
-`g1_pose_action.py`(PC, MediaPipe→팔 동작)
-
-**기타:** `g1_speak.py`(TTS 합성 — 로봇 재생은 보류, 부활 후보) ·
-`g1_audio_test.py` · `g1_env.sh` · `mid360s*.yaml` · `MID360s_config.json`
-
-## 폴더
-
-```
-docs/       개념·가이드 문서 (OVERVIEW, SETUP, NAV2/POSE/RELAY/ODOM_B GUIDE …)
-maps/       실행용 지도 (깃 제외 — 루트 사본이 등재본)
-logs/       실행 로그 (깃 제외, nav.sh 가 자동 기록)
-archive/    은퇴 코드 — dds_experiments(규명 실험) · old_stack · unused
+```jsx
+ $ ssh unitree@192.168.123.164
+ #pw: 123 , foxy(1)
+ $ PYTHONPATH=$HOME/librealsense/build/Release python3 ~/g1_rgbd_server.py
 ```
 
-## 날짜별 기록
+- pose
 
-- `SESSION_2026-08-24.md` — Nav2 실주행 1일차 (지도·AMCL·데드밴드)
-- `SESSION_2026-08-25.md` — 회전 문제 종결 · DDS 규명 · **B안 개통,
-  첫 자율 180도 왕복**
+!Screenshot from 2026-08-25 15-13-55.png
+
+```python
+# MediaPipe Pose 랜드마크 번호
+NOSE = 0
+MOUTH_LEFT, MOUTH_RIGHT = 9, 10
+L_SHOULDER, R_SHOULDER = 11, 12
+L_ELBOW, R_ELBOW = 13, 14
+L_WRIST, R_WRIST = 15, 1
+```
+
+- hand
+
+!Screenshot from 2026-08-25 15-12-06.png
+
+```python
+
+# MediaPipe Hands 랜드마크 번호 (Holistic 의 left_hand_landmarks/right_hand_landmarks)
+HAND_WRIST = 0
+HAND_THUMB_TIP = 4
+HAND_INDEX_TIP = 8
+HAND_INDEX_MCP = 5
+HAND_MIDDLE_TIP = 12
+HAND_MIDDLE_MCP = 9
+HAND_RING_TIP = 16
+HAND_RING_MCP = 13
+HAND_PINKY_TIP = 20
+HAND_PINKY_MCP = 17
+```
+
+- holistic
+
+!image.png
+
+## ID	SDK 이름	실기체 이름
+
+```python
+11	two-hand kiss	blow_kiss_with_both_hands
+12	left kiss	blow_kiss_with_left_hand
+13	right kiss	blow_kiss_with_right_hand
+15	hands up	both_hands_up
+17	clap	clamp
+18	high five	high_five
+19	hug	hug
+20	heart	make_heart_with_both_hands
+21	right heart	make_heart_with_right_hand
+22	reject	refuse
+23	right hand up	right_hand_up
+24	x-ray	ultraman_ray
+25	face wave	wave_under_head
+26	high wave	wave_above_head
+27	shake hand	shake_hand
+99	release arm	release_arm
+```
+
+# g1_interaction_controller.py
+
+- 기존 pose_action.py에 음성 출력 과 음성인식을 병합함
+- 안전거리 판별 알고리즘을 추가함.
+
+g1_pose_action.py 와 g1_speech.py, g1_person_distance.py는 동일파일에 있어야함.
+
+# 포즈 맵
+
+```python
+POSE_ACTION_MAP = {
+    "right_hand_up":   (ACTION_RIGHT_HAND_UP, "G1 오른손 올리기"),
+    "right_hand_wave": (ACTION_WAVE,          "G1 오른손 흔들기"),
+    "left_hand_up":    (ACTION_LEFT_HAND_UP,  "G1 왼손 올리기 (오른손 액션으로 대신 실행)"),
+    "left_hand_wave":  (ACTION_WAVE,          "G1 왼손 흔들기 (오른손 액션으로 대신 실행)"),
+    "both_hands_up":   (ACTION_BOTH_HANDS_UP, "G1 양팔 올리기"),
+    "two_hand_kiss":   (ACTION_TWO_HAND_KISS, "G1 양손 뽀뽀"),
+    "left_kiss":       (ACTION_LEFT_KISS,     "G1 왼손 뽀뽀"),
+    "right_kiss":      (ACTION_RIGHT_KISS,    "G1 오른손 뽀뽀"),
+    "two_hand_heart":  (ACTION_TWO_HAND_HEART, "G1 양손 하트"),
+    "xray":            (ACTION_XRAY,           "G1 엑스레이 (울트라맨 광선)"),
+}
+```
+
+# 음성 인식
+
+```python
+COMMAND_MAP = [
+(["뽀뽀", "키스"],                    ACTION_TWO_HAND_KISS,  "양손 뽀뽀"),
+(["왼손 뽀뽀"],                       ACTION_LEFT_KISS,      "왼손 뽀뽀"),
+(["오른손 뽀뽀"],                     ACTION_RIGHT_KISS,     "오른손 뽀뽀"),
+(["만세", "양손 들어", "손 들어"],      ACTION_BOTH_HANDS_UP,  "양손 올리기"),
+(["박수", "짝짝"],                    ACTION_CLAP,           "박수"),
+(["하이파이브", "하이 파이브"],         ACTION_HIGH_FIVE,      "하이파이브"),
+(["안아줘", "허그", "포옹"],            ACTION_HUG,            "허그"),
+(["하트", "사랑해"],                   ACTION_TWO_HAND_HEART, "양손 하트"),
+(["오른손 하트"],                     ACTIONq_RIGHT_HEART,    "오른손 하트"),
+(["싫어", "거절", "안돼"],              ACTION_REJECT,         "거절"),
+(["오른손 들어"],                     ACTION_RIGHT_HAND_UP,  "오른손 올리기"),
+(["레이저", "울트라맨", "액션빔"],       ACTION_XRAY,           "엑스레이"),
+(["얼굴 흔들어"],                     ACTION_FACE_WAVE,      "얼굴 앞 흔들기"),
+(["흔들어", "안녕", "인사"],            ACTION_WAVE,           "손 흔들기"),
+(["악수"],                           ACTION_SHAKE_HAND,     "악수"),
+(["그만", "놓아", "릴리즈", "release"], ACTION_RELEASE,        "팔 제어권 반납"),
+]
+```
