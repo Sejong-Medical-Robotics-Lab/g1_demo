@@ -6,9 +6,26 @@
  $ PYTHONPATH=$HOME/librealsense/build/Release python3 ~/g1_rgbd_server.py
 ```
 
-- pose
+## 실행 
+```
+① 개발·연습 — 노트북 웹캠 + 마이크, 로봇 없이
+     python3 g1_combined_action.py --source 0 --dry-run
 
-!Screenshot from 2026-08-25 15-13-55.png
+② 실전 — 로봇을 FSM 501 로 올린 뒤
+     g1
+     python3 g1_stand_test.py --iface $G1_IFACE
+     python3 g1_combined_action.py --iface $G1_IFACE
+     python3 g1_combined_action.py --source 0 --dry-run          # 웹캠+마이크 둘 다 테스트
+     python3 g1_combined_action.py --iface $G1_IFACE              # 실전, 포즈+음성 동시
+     python3 g1_combined_action.py --iface $G1_IFACE --no-voice   # 포즈만
+     
+     
+     python3 g1_combined_action.py --iface $G1_IFACE --no-pose --mic-index 8  # 음성만
+
+  · 포즈나 음성 중 하나만 쓰고 싶으면 --no-voice 또는 --no-pose
+  · q 또는 Esc(카메라 창) / Ctrl+C 로 종료
+  · "그만"/"놓아"/"릴리즈" 라고 말하면 팔 제어권을 반납한다(release, 99)
+```
 
 ```python
 # MediaPipe Pose 랜드마크 번호
@@ -17,13 +34,6 @@ MOUTH_LEFT, MOUTH_RIGHT = 9, 10
 L_SHOULDER, R_SHOULDER = 11, 12
 L_ELBOW, R_ELBOW = 13, 14
 L_WRIST, R_WRIST = 15, 1
-```
-
-- hand
-
-!Screenshot from 2026-08-25 15-12-06.png
-
-```python
 
 # MediaPipe Hands 랜드마크 번호 (Holistic 의 left_hand_landmarks/right_hand_landmarks)
 HAND_WRIST = 0
@@ -38,9 +48,6 @@ HAND_PINKY_TIP = 20
 HAND_PINKY_MCP = 17
 ```
 
-- holistic
-
-!image.png
 
 ## ID	SDK 이름	실기체 이름
 
